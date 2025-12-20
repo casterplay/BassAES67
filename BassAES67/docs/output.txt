@@ -1,0 +1,25 @@
+BASS AES67 Plugin Test
+======================
+
+BASS version: 2.4.18.3
+
+Initializing BASS...
+BASS initialized successfully
+
+Loading AES67 plugin...
+Plugin loaded successfully (handle: 1)
+
+Configuring AES67...
+  Interface: 192.168.60.102
+  Payload type: 96
+  Jitter buffer: 20ms
+
+Connecting to AES67 stream...
+Stream created (handle: 2147483649)
+
+Starting playback...
+Playback started!
+
+Press Ctrl+C to stop...
+
+Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing Status: Playing 

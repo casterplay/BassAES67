@@ -1,0 +1,3 @@
+AES67 stream:	239.192.76.52
+PtpDomain:	0
+Network interface: "AoIP" (192.168.60.102)

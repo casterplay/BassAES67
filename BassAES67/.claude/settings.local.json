@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(dir \"C:\\Dev\\Lab\\BASS\\bass-aes67\\target\\debug\\*.dll\")",
+      "Bash(cargo run:*)",
+      "Bash(cargo clean:*)",
+      "Bash(copy \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-ptp\\\\target\\\\debug\\\\bass_ptp.dll\" \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\debug\\\\examples\"\")",
+      "Bash(copy \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\debug\\\\bass_aes67.dll\" \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\debug\\\\examples\"\")",
+      "Bash(copy \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass24\\\\x64\\\\bass.dll\" \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\debug\\\\examples\"\")",
+      "Bash(xcopy:*)",
+      "Bash(cmd /c \"copy c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-ptp\\\\target\\\\debug\\\\bass_ptp.dll c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\debug\\\\examples\"\")",
+      "Bash(cat:*)",
+      "Bash(cmd /c \"cd /d c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67 && cargo build --example cpal_output 2>&1\")",
+      "Bash(cmd /c \"cd /d c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67 && cargo build --example cpal_output\")",
+      "Bash(powershell -Command \"Set-Location ''c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67''; cargo build --example cpal_output 2>&1\")",
+      "Bash(powershell -Command:*)",
+      "Bash(cargo test:*)",
+      "Bash(ls:*)",
+      "Bash(taskkill //F //IM aes67_loopback.exe)",
+      "Bash(taskkill //F //IM file_to_aes67.exe)",
+      "Bash(dir \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\release\\\\*.dll\")",
+      "Bash(dir \"c:\\\\Dev\\\\Lab\\\\BASS\\\\*.dll\")",
+      "Bash(./aes67_loopback.exe)",
+      "Bash(timeout:*)",
+      "Bash(copy \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\release\\\\bass_aes67.dll\" \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\release\\\\examples\"\" && dir \"c:DevLabBASSbass-aes67targetreleaseexamples*.exe \")",
+      "Bash(copy \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\release\\\\bass_aes67.dll\" \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\release\\\\examples\"\")",
+      "Bash(cmd /c:*)",
+      "Bash(copy \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\release\\\\bass_aes67.dll\" \"c:\\\\Dev\\\\Lab\\\\BASS\\\\bass-aes67\\\\target\\\\release\\\\examples\"\" && cd \"c:DevLabBASSbass-aes67targetreleaseexamples \")",
+      "Bash(powershell -Command \"Copy-Item ''target/release/bass_aes67.dll'' ''target/release/examples/'' -Force\")",
+      "Bash(timeout 60:*)"
+    ]
+  }
+}

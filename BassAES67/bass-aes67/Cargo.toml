@@ -1,0 +1,53 @@
+[package]
+name = "bass-aes67"
+version = "0.1.0"
+edition = "2021"
+description = "AES67 input/output plugin for BASS audio library"
+license = "MIT"
+
+[lib]
+# cdylib = shared library (.dll on Windows, .so on Linux)
+# rlib = rust library for examples to link against
+crate-type = ["cdylib", "rlib"]
+
+[[example]]
+name = "test_stream"
+path = "examples/test_stream.rs"
+
+[[example]]
+name = "no_soundcard"
+path = "examples/no_soundcard.rs"
+
+[[example]]
+name = "cpal_output"
+path = "examples/cpal_output.rs"
+
+[[example]]
+name = "aes67_loopback"
+path = "examples/aes67_loopback.rs"
+
+[[example]]
+name = "file_to_aes67"
+path = "examples/file_to_aes67.rs"
+
+[[example]]
+name = "aes67_low_latency"
+path = "examples/aes67_low_latency.rs"
+
+[[example]]
+name = "aes67_input_lab"
+path = "examples/aes67_input_lab.rs"
+
+[dependencies]
+socket2 = { version = "0.5", features = ["all"] }
+ringbuf = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }
+
+[dev-dependencies]
+cpal = "0.15"
+ringbuf = "0.4"
+parking_lot = "0.12"
+
+[build-dependencies]

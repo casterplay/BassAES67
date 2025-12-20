@@ -1,0 +1,33 @@
+AES67: stream_create_url called
+AES67: URL = aes67://239.192.76.52:5004
+AES67: Parsed - multicast=239.192.76.52, port=5004
+AES67: Creating stream object...
+AES67: Starting receiver...
+AES67: Binding socket to 0.0.0.0:5004
+AES67: Joining multicast group 239.192.76.52 on interface 192.168.60.102
+AES67: Socket configured successfully
+AES67: Receiver started
+AES67: create_stream function found at 0x7fffc048e0b4
+AES67: Creating BASS stream (rate=48000, ch=2, flags=0x100)
+AES67: stream_proc at 0x7fffbfafea10, user=0x1cd2cad7020
+DEBUG: BassFunctions size = 224
+DEBUG: BassFileFunctions size = 120
+DEBUG: BassDataFunctions size = 24
+DEBUG: offset set_error = 0
+DEBUG: offset register_plugin = 8
+DEBUG: offset create_stream = 16
+DEBUG: offset set_fx = 24
+DEBUG: offset get_inst = 32
+DEBUG: offset reserved1 = 40
+DEBUG: offset new_sync = 48
+DEBUG: offset trigger_sync = 56
+DEBUG: offset get_count = 64
+DEBUG: offset get_position = 72
+DEBUG: offset file = 80
+DEBUG: offset data = 200
+AES67: About to call create_stream...
+AES67: create_stream returned: 2147483649
+AES67: Stream created successfully (handle=2147483649)
+AES67: stream_proc called (handle=2147483649, len=76800, user=0x1cd2cad7020, call=1)
+AES67: stream_proc called (handle=2147483649, len=76800, user=0x1cd2cad7020, call=2)
+AES67: stream_proc called (handle=2147483649, len=76800, user=0x1cd2cad7020, call=3)

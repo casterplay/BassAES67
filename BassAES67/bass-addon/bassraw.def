@@ -1,0 +1,5 @@
+EXPORTS
+	BASS_RAW_StreamCreateFile
+	BASS_RAW_StreamCreateURL
+	BASS_RAW_StreamCreateFileUser
+	BASSplugin

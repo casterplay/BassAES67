@@ -1,0 +1,34 @@
+24bit to float:
+
+		int nsamples = (len - 12) / 3 /* 24-bit */ / nchannels;
+		samples_24bit = packet + 12; /* skip RTP header */
+		{
+		for (int i = 0; i < nsamples; i++) { /* 24-bit data packet to float buffers */
+			for (int ichannel = 0; ichannel < nchannels; ichannel++) {
+				samples[ichannel][i] = 0.00000011920929f * /* normalize to -1..1 */
+					(float)(((int)samples_24bit[0] << 16) +
+						((int)(unsigned char)samples_24bit[1] << 8) +
+						(int)(unsigned char)samples_24bit[2]);
+				samples_24bit += 3;
+			}
+		}
+		}
+
+		
+
+		
+float to 24bit:
+
+		{
+		int i=0;
+		for (i = 0; i < nsamples; i++) { /* float samples to 24-bit data packet */
+			for (int ichannel = 0; ichannel < nchannels; ichannel++) {
+				float x = samples[ichannel][i];
+				long y = (long)(2147483648.f * x * 0.5 /* -6dB */) /* 32-bit */;
+				samples_24bit[0] = (char)(y >> 24); /* MSB */
+				samples_24bit[1] = (char)(y >> 16); /* --- */
+				samples_24bit[2] = (char)(y >>  8); /* LSB */
+				samples_24bit += 3;
+			}
+		}
+		}

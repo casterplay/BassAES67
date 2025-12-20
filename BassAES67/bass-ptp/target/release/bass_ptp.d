@@ -1,0 +1,1 @@
+C:\Dev\Lab\BASS\bass-ptp\target\release\bass_ptp.dll: C:\Dev\Lab\BASS\bass-ptp\src\client.rs C:\Dev\Lab\BASS\bass-ptp\src\lib.rs C:\Dev\Lab\BASS\bass-ptp\src\messages.rs C:\Dev\Lab\BASS\bass-ptp\src\platform.rs C:\Dev\Lab\BASS\bass-ptp\src\servo.rs C:\Dev\Lab\BASS\bass-ptp\src\stats.rs C:\Dev\Lab\BASS\bass-ptp\src\timer.rs
