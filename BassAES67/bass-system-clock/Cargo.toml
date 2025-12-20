@@ -1,0 +1,23 @@
+[package]
+name = "bass-system-clock"
+version = "0.1.0"
+edition = "2021"
+description = "System clock (free-running) for AES67 audio - fallback when network clocks unavailable"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+parking_lot = "0.12"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+    "Win32_Security",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

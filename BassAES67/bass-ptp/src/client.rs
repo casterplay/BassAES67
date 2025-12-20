@@ -171,14 +171,27 @@ pub fn stop_ptp_client() {
         None => return,
     };
 
+    // First, signal threads to stop BEFORE acquiring locks for join
+    {
+        let client_guard = match client_mutex.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if let Some(ref handle) = *client_guard {
+            handle.running.store(false, Ordering::SeqCst);
+        }
+    }
+
+    // Give threads a moment to see the flag and exit (they have 100ms socket timeout)
+    std::thread::sleep(Duration::from_millis(150));
+
+    // Now take the handle and join threads
     let mut client_guard = match client_mutex.lock() {
         Ok(g) => g,
         Err(_) => return,
     };
 
     if let Some(mut handle) = client_guard.take() {
-        handle.running.store(false, Ordering::SeqCst);
-
         if let Some(thread) = handle.event_thread.take() {
             let _ = thread.join();
         }
@@ -188,7 +201,9 @@ pub fn stop_ptp_client() {
     }
 }
 
-/// Force stop the PTP client regardless of reference count
+/// Force stop the PTP client regardless of reference count.
+/// This version signals threads to stop but does NOT join them.
+/// Safe to call from DllMain where joining threads would deadlock.
 pub fn force_stop_ptp_client() {
     REFERENCE_COUNT.store(0, Ordering::SeqCst);
 
@@ -197,20 +212,22 @@ pub fn force_stop_ptp_client() {
         None => return,
     };
 
+    // Signal threads to stop - do NOT join (unsafe in DllMain context)
     let mut client_guard = match client_mutex.lock() {
         Ok(g) => g,
         Err(_) => return,
     };
 
-    if let Some(mut handle) = client_guard.take() {
+    if let Some(ref handle) = *client_guard {
         handle.running.store(false, Ordering::SeqCst);
+    }
 
-        if let Some(thread) = handle.event_thread.take() {
-            let _ = thread.join();
-        }
-        if let Some(thread) = handle.general_thread.take() {
-            let _ = thread.join();
-        }
+    // Take the handle but don't join - let threads terminate on their own
+    // The threads will see running=false and exit after their socket timeout
+    if let Some(mut handle) = client_guard.take() {
+        // Drop thread handles without joining - they'll terminate naturally
+        drop(handle.event_thread.take());
+        drop(handle.general_thread.take());
     }
 }
 

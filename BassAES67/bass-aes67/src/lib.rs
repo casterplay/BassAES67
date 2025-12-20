@@ -12,7 +12,7 @@
 mod ffi;
 mod input;
 mod output;
-mod ptp_bindings;
+mod clock_bindings;
 
 // Re-export output module for external use
 pub use output::{Aes67OutputStream, Aes67OutputConfig, OutputStats};
@@ -59,6 +59,13 @@ pub const BASS_CONFIG_AES67_TARGET_PACKETS: DWORD = 0x20015; // Get target buffe
 pub const BASS_CONFIG_AES67_PACKET_TIME: DWORD = 0x20016; // Get detected packet time in microseconds
 pub const BASS_CONFIG_AES67_PTP_LOCKED: DWORD = 0x20017;  // PTP locked status (0/1)
 pub const BASS_CONFIG_AES67_PTP_FREQ: DWORD = 0x20018;    // PTP frequency in PPM × 1000
+pub const BASS_CONFIG_AES67_CLOCK_MODE: DWORD = 0x20019;  // Clock mode: 0=PTP, 1=Livewire, 2=System
+pub const BASS_CONFIG_AES67_CLOCK_FALLBACK_TIMEOUT: DWORD = 0x2001A; // Fallback timeout in seconds (0=disabled)
+
+// Clock mode values
+pub const BASS_AES67_CLOCK_PTP: DWORD = 0;
+pub const BASS_AES67_CLOCK_LIVEWIRE: DWORD = 1;
+pub const BASS_AES67_CLOCK_SYSTEM: DWORD = 2;
 
 // Default configuration values
 static mut CONFIG_PT: DWORD = 96;
@@ -66,6 +73,8 @@ static mut CONFIG_INTERFACE: [u8; 64] = [0; 64];
 static mut CONFIG_JITTER_MS: DWORD = 10;
 static mut CONFIG_PTP_DOMAIN: DWORD = 0;
 static mut CONFIG_PTP_ENABLED: DWORD = 1; // Enabled by default
+static mut CONFIG_CLOCK_MODE: DWORD = 0;  // 0=PTP (default), 1=Livewire, 2=System
+static mut CONFIG_FALLBACK_TIMEOUT: DWORD = 5; // 5 seconds default fallback timeout
 
 // Global stream reference for buffer level queries
 // Uses AtomicPtr for thread-safe access without mutex overhead in the audio callback
@@ -205,7 +214,8 @@ unsafe extern "system" fn config_handler(option: DWORD, flags: DWORD, value: *mu
             }
             // Get stats string and store pointer
             // Note: This returns a static string that's valid until next call
-            let stats = ptp_bindings::ptp_get_stats_string();
+            let stats = clock_bindings::clock_get_stats_string();
+
             // Store the string in a static buffer for FFI compatibility
             static mut STATS_BUFFER: [u8; 256] = [0; 256];
             let bytes = stats.as_bytes();
@@ -223,19 +233,19 @@ unsafe extern "system" fn config_handler(option: DWORD, flags: DWORD, value: *mu
             if is_ptr {
                 return FALSE;
             }
-            let offset = ptp_bindings::ptp_get_offset();
+            let offset = clock_bindings::clock_get_offset();
             *(value as *mut i64) = offset;
             TRUE
         }
         BASS_CONFIG_AES67_PTP_STATE => {
-            // Read-only: return PTP state
+            // Read-only: return clock state
             if is_set {
                 return FALSE;
             }
             if is_ptr {
                 return FALSE;
             }
-            let state = ptp_bindings::ptp_get_state() as DWORD;
+            let state = clock_bindings::clock_get_state() as DWORD;
             *(value as *mut DWORD) = state;
             TRUE
         }
@@ -359,22 +369,50 @@ unsafe extern "system" fn config_handler(option: DWORD, flags: DWORD, value: *mu
             TRUE
         }
         BASS_CONFIG_AES67_PTP_LOCKED => {
-            // Read-only: return PTP locked status (0 or 1)
+            // Read-only: return clock locked status (0 or 1)
             if is_set || is_ptr {
                 return FALSE;
             }
-            let locked = if ptp_bindings::ptp_is_locked() { 1 } else { 0 };
+            let locked = if clock_bindings::clock_is_locked() { 1 } else { 0 };
             *(value as *mut DWORD) = locked;
             TRUE
         }
         BASS_CONFIG_AES67_PTP_FREQ => {
-            // Read-only: return PTP frequency in PPM × 1000 (for precision)
+            // Read-only: return clock frequency in PPM × 1000 (for precision)
             if is_set || is_ptr {
                 return FALSE;
             }
-            let ppm = ptp_bindings::ptp_get_frequency_ppm();
+            let ppm = clock_bindings::clock_get_frequency_ppm();
             // Return as i32 × 1000 for precision (e.g., +3.45 ppm → 3450)
             *(value as *mut i32) = (ppm * 1000.0) as i32;
+            TRUE
+        }
+        BASS_CONFIG_AES67_CLOCK_MODE => {
+            // Clock mode: 0=PTP, 1=Livewire, 2=System
+            if is_ptr {
+                return FALSE;
+            }
+            let dvalue = value as *mut DWORD;
+            if is_set {
+                CONFIG_CLOCK_MODE = *dvalue;
+            } else {
+                *dvalue = CONFIG_CLOCK_MODE;
+            }
+            TRUE
+        }
+        BASS_CONFIG_AES67_CLOCK_FALLBACK_TIMEOUT => {
+            // Fallback timeout in seconds (0=disabled)
+            if is_ptr {
+                return FALSE;
+            }
+            let dvalue = value as *mut DWORD;
+            if is_set {
+                CONFIG_FALLBACK_TIMEOUT = *dvalue;
+                // Also update the clock_bindings fallback timeout
+                clock_bindings::set_fallback_timeout(*dvalue);
+            } else {
+                *dvalue = CONFIG_FALLBACK_TIMEOUT;
+            }
             TRUE
         }
         _ => FALSE,
@@ -447,10 +485,11 @@ unsafe extern "system" fn stream_create_url(
         return 0;
     }
 
-    // Start PTP client if enabled and interface is configured
+    // Start clock client if enabled and interface is configured
     if CONFIG_PTP_ENABLED != 0 {
         if let Some(iface) = config.interface {
-            let _ = ptp_bindings::ptp_start(iface, CONFIG_PTP_DOMAIN as u8);
+            let mode = clock_bindings::ClockMode::from(CONFIG_CLOCK_MODE);
+            let _ = clock_bindings::clock_start(iface, CONFIG_PTP_DOMAIN as u8, mode);
         }
     }
 
@@ -554,15 +593,15 @@ pub unsafe extern "system" fn DllMain(
                 }
             }
 
-            // Initialize PTP bindings (try to load bass_ptp.dll)
-            ptp_bindings::init_ptp_bindings();
+            // Initialize clock bindings (try to load bass_ptp.dll and bass_livewire_clock.dll)
+            clock_bindings::init_clock_bindings();
 
             INITIALIZED.store(true, Ordering::SeqCst);
             TRUE
         }
         DLL_PROCESS_DETACH => {
-            // Stop PTP client
-            ptp_bindings::ptp_stop();
+            // Stop clock client
+            clock_bindings::clock_stop();
 
             // Unregister config handler
             if let Some(func) = bassfunc() {
@@ -601,8 +640,8 @@ static INIT: extern "C" fn() = {
                 }
             }
 
-            // Initialize PTP bindings (try to load bass_ptp.so)
-            ptp_bindings::init_ptp_bindings();
+            // Initialize clock bindings (try to load bass_ptp.so and bass_livewire_clock.so)
+            clock_bindings::init_clock_bindings();
 
             INITIALIZED.store(true, Ordering::SeqCst);
         }
@@ -617,8 +656,8 @@ static INIT: extern "C" fn() = {
 static FINI: extern "C" fn() = {
     extern "C" fn fini() {
         unsafe {
-            // Stop PTP client
-            ptp_bindings::ptp_stop();
+            // Stop clock client
+            clock_bindings::clock_stop();
 
             if let Some(func) = bassfunc() {
                 if let Some(register) = func.register_plugin {

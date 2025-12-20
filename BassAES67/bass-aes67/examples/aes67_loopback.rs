@@ -1,18 +1,26 @@
 //! AES67 loopback example - receives AES67, routes through BASS, transmits as AES67.
 //!
-//! Usage: cargo run --example aes67_loopback
+//! Usage:
+//!   cargo run --example aes67_loopback           # Use PTP clock (default)
+//!   cargo run --example aes67_loopback -- ptp    # Use PTP clock
+//!   cargo run --example aes67_loopback -- lw     # Use Livewire clock
+//!   cargo run --example aes67_loopback -- sys    # Use System clock (free-running)
 //!
 //! This demonstrates the production use case:
-//!   AES67 INPUT → BASS (decode/mixer/effects) → AES67 OUTPUT
+//!   AES67 INPUT -> BASS (decode/mixer/effects) -> AES67 OUTPUT
 //!
-//! When both input and output use PTP network timing, there is NO clock drift
+//! When both input and output use network timing (PTP or Livewire), there is NO clock drift
 //! to compensate for - they share the same reference clock.
 //!
+//! System clock mode is useful for testing or when no network clock is available.
+//! It runs at nominal rate with no synchronization.
+//!
 //! Test with Livewire/xNode:
-//! - Input: Livewire stream on 239.192.76.52:5004
-//! - Output: New multicast 239.192.76.53:5004 (configure xNode to receive)
+//! - Input: Livewire stream on 239.192.76.49:5004
+//! - Output: New multicast 239.192.1.100:5004 (configure xNode to receive)
 
 use std::collections::VecDeque;
+use std::env;
 use std::ffi::{c_char, c_void, CString};
 use std::net::Ipv4Addr;
 use std::ptr;
@@ -43,62 +51,33 @@ extern "system" {
     fn BASS_SetConfig(option: DWORD, value: DWORD) -> BOOL;
     fn BASS_SetConfigPtr(option: DWORD, value: *const c_void) -> BOOL;
     fn BASS_GetConfig(option: DWORD) -> DWORD;
+    fn BASS_GetConfigPtr(option: DWORD) -> *const c_void;
 }
 
-// bass_ptp function types (loaded dynamically)
-type PtpStartFn = unsafe extern "C" fn(*const c_char, u8) -> i32;
-type PtpStopFn = unsafe extern "C" fn() -> i32;
-type PtpGetStatsStringFn = unsafe extern "C" fn(*mut c_char, i32) -> i32;
-type PtpIsLockedFn = unsafe extern "C" fn() -> i32;
-
-// Windows API for dynamic loading
-#[cfg(windows)]
-#[link(name = "kernel32")]
-extern "system" {
-    fn LoadLibraryW(lpLibFileName: *const u16) -> *mut c_void;
-    fn GetProcAddress(hModule: *mut c_void, lpProcName: *const i8) -> *mut c_void;
+/// Clock mode selection
+#[derive(Clone, Copy, PartialEq)]
+enum ClockMode {
+    Ptp,
+    Livewire,
+    System,
 }
 
-#[cfg(windows)]
-fn to_wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-struct PtpFunctions {
-    start: PtpStartFn,
-    stop: PtpStopFn,
-    get_stats_string: PtpGetStatsStringFn,
-    is_locked: PtpIsLockedFn,
-}
-
-#[cfg(windows)]
-unsafe fn load_ptp_dll() -> Option<PtpFunctions> {
-    let handle = LoadLibraryW(to_wide("bass_ptp.dll").as_ptr());
-    if handle.is_null() {
-        return None;
+impl ClockMode {
+    fn name(&self) -> &'static str {
+        match self {
+            ClockMode::Ptp => "PTP",
+            ClockMode::Livewire => "Livewire",
+            ClockMode::System => "System",
+        }
     }
 
-    macro_rules! load_fn {
-        ($name:expr, $ty:ty) => {{
-            let ptr = GetProcAddress(handle, concat!($name, "\0").as_ptr() as *const i8);
-            if ptr.is_null() {
-                return None;
-            }
-            std::mem::transmute::<*mut c_void, $ty>(ptr)
-        }};
+    fn config_value(&self) -> DWORD {
+        match self {
+            ClockMode::Ptp => 0,
+            ClockMode::Livewire => 1,
+            ClockMode::System => 2,
+        }
     }
-
-    Some(PtpFunctions {
-        start: load_fn!("BASS_PTP_Start", PtpStartFn),
-        stop: load_fn!("BASS_PTP_Stop", PtpStopFn),
-        get_stats_string: load_fn!("BASS_PTP_GetStatsString", PtpGetStatsStringFn),
-        is_locked: load_fn!("BASS_PTP_IsLocked", PtpIsLockedFn),
-    })
-}
-
-#[cfg(not(windows))]
-unsafe fn load_ptp_dll() -> Option<PtpFunctions> {
-    None
 }
 
 // Config constants
@@ -110,11 +89,14 @@ const BASS_CONFIG_UPDATEPERIOD: DWORD = 6;
 const BASS_CONFIG_AES67_INTERFACE: DWORD = 0x20001;
 const BASS_CONFIG_AES67_JITTER: DWORD = 0x20002;
 const BASS_CONFIG_AES67_PTP_DOMAIN: DWORD = 0x20003;
+const BASS_CONFIG_AES67_PTP_STATS: DWORD = 0x20004;
 const BASS_CONFIG_AES67_JITTER_UNDERRUNS: DWORD = 0x20011;
 const BASS_CONFIG_AES67_PACKETS_RECEIVED: DWORD = 0x20012;
 const BASS_CONFIG_AES67_PACKETS_LATE: DWORD = 0x20013;
 const BASS_CONFIG_AES67_BUFFER_PACKETS: DWORD = 0x20014;
 const BASS_CONFIG_AES67_TARGET_PACKETS: DWORD = 0x20015;
+const BASS_CONFIG_AES67_PTP_LOCKED: DWORD = 0x20017;
+const BASS_CONFIG_AES67_CLOCK_MODE: DWORD = 0x20019;
 
 // Channel states
 const BASS_ACTIVE_STOPPED: DWORD = 0;
@@ -123,28 +105,32 @@ const BASS_ACTIVE_STOPPED: DWORD = 0;
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
 fn main() {
+    // Parse command line arguments
+    let args: Vec<String> = env::args().collect();
+    let clock_mode = if args.len() > 1 {
+        match args[1].to_lowercase().as_str() {
+            "lw" | "livewire" => ClockMode::Livewire,
+            "sys" | "system" => ClockMode::System,
+            "ptp" | _ => ClockMode::Ptp,
+        }
+    } else {
+        ClockMode::Ptp // Default to PTP
+    };
+
     println!("BASS AES67 Loopback Example");
     println!("============================\n");
-    println!("This example receives AES67 audio, routes through BASS,");
+    println!("Clock Mode: {}", clock_mode.name());
+    println!("\nThis example receives AES67 audio, routes through BASS,");
     println!("and transmits it on a different multicast group.\n");
+    println!("Usage: aes67_loopback [ptp|lw|sys]");
+    println!("  ptp - Use IEEE 1588v2 PTP (default)");
+    println!("  lw  - Use Axia Livewire Clock");
+    println!("  sys - Use System Clock (free-running, no sync)\n");
 
     // Install Ctrl+C handler
     ctrlc_handler();
 
     unsafe {
-        // Load bass_ptp.dll
-        println!("Loading bass_ptp.dll...");
-        let ptp = match load_ptp_dll() {
-            Some(p) => {
-                println!("  bass_ptp.dll loaded");
-                p
-            }
-            None => {
-                println!("ERROR: Failed to load bass_ptp.dll");
-                return;
-            }
-        };
-
         // Get BASS version
         let version = BASS_GetVersion();
         println!("BASS version: {}.{}.{}.{}",
@@ -177,44 +163,26 @@ fn main() {
         }
         println!("  bass_aes67.dll loaded");
 
-        // Configure AES67 for Livewire
+        // Configure AES67
+        // Set clock mode BEFORE creating streams
+        BASS_SetConfig(BASS_CONFIG_AES67_CLOCK_MODE, clock_mode.config_value());
+        println!("  Clock mode set to: {} ({})", clock_mode.name(), clock_mode.config_value());
+
         // Interface for the AoIP network
         let interface = CString::new("192.168.60.102").unwrap();
         BASS_SetConfigPtr(BASS_CONFIG_AES67_INTERFACE, interface.as_ptr() as *const c_void);
+
         // Livewire uses 200 packets/sec (5ms)
         // 10ms jitter buffer - minimal latency
         BASS_SetConfig(BASS_CONFIG_AES67_JITTER, 10);
-        // Livewire uses PTP domain 1
+
+        // PTP domain 1 for Livewire (ignored in Livewire clock mode)
         BASS_SetConfig(BASS_CONFIG_AES67_PTP_DOMAIN, 1);
-        println!("  AES67 configured (interface=192.168.60.102, jitter=50ms, domain=1)");
 
-        // Start PTP client
-        let ptp_interface = CString::new("192.168.60.102").unwrap();
-        let ptp_result = (ptp.start)(ptp_interface.as_ptr(), 1);  // Domain 1 for Livewire
-        if ptp_result != 0 {
-            println!("WARNING: PTP start returned {}", ptp_result);
-        }
-        println!("  PTP client started (domain=1)");
-
-        // Wait for PTP to lock (optional but recommended for best sync)
-        println!("\nWaiting for PTP lock...");
-        let mut ptp_wait = 0;
-        while (ptp.is_locked)() == 0 && ptp_wait < 100 {
-            thread::sleep(Duration::from_millis(100));
-            ptp_wait += 1;
-            if ptp_wait % 10 == 0 {
-                print!(".");
-                use std::io::Write;
-                std::io::stdout().flush().unwrap();
-            }
-        }
-        if (ptp.is_locked)() != 0 {
-            println!("\n  PTP locked!");
-        } else {
-            println!("\n  PTP not locked yet (continuing anyway)");
-        }
+        println!("  AES67 configured (interface=192.168.60.102, jitter=10ms, domain=1)");
 
         // Create AES67 INPUT stream (decode mode - we'll pull audio from it)
+        // Note: This will start the clock client automatically based on CLOCK_MODE
         println!("\nCreating AES67 input stream...");
         let input_url = CString::new("aes67://239.192.76.49:5004").unwrap();
         let input_stream = BASS_StreamCreateURL(
@@ -227,15 +195,33 @@ fn main() {
 
         if input_stream == 0 {
             println!("ERROR: Failed to create input stream (error {})", BASS_ErrorGetCode());
-            (ptp.stop)();
             BASS_PluginFree(plugin);
             BASS_Free();
             return;
         }
         println!("  Input stream created (handle: {}, source: 239.192.76.49:5004)", input_stream);
+        println!("  {} clock started automatically by bass_aes67", clock_mode.name());
+
+        // Wait for clock to lock (use BASS config API)
+        println!("\nWaiting for {} lock...", clock_mode.name());
+        let mut wait_count = 0;
+        while BASS_GetConfig(BASS_CONFIG_AES67_PTP_LOCKED) == 0 && wait_count < 100 {
+            thread::sleep(Duration::from_millis(100));
+            wait_count += 1;
+            if wait_count % 10 == 0 {
+                print!(".");
+                use std::io::Write;
+                std::io::stdout().flush().unwrap();
+            }
+        }
+        if BASS_GetConfig(BASS_CONFIG_AES67_PTP_LOCKED) != 0 {
+            println!("\n  {} locked!", clock_mode.name());
+        } else {
+            println!("\n  {} not locked yet (continuing anyway)", clock_mode.name());
+        }
 
         // Create AES67 OUTPUT stream
-        // Note: Both input and output use PTP timing for sync
+        // Note: Both input and output use network timing for sync
         println!("\nCreating AES67 output stream...");
         let output_config = bass_aes67::Aes67OutputConfig {
             multicast_addr: Ipv4Addr::new(239, 192, 1, 100),  // Livewire destination
@@ -255,7 +241,6 @@ fn main() {
             Err(e) => {
                 println!("ERROR: Failed to create output stream: {}", e);
                 BASS_StreamFree(input_stream);
-                (ptp.stop)();
                 BASS_PluginFree(plugin);
                 BASS_Free();
                 return;
@@ -282,7 +267,6 @@ fn main() {
         if let Err(e) = output_stream.start() {
             println!("ERROR: Failed to start output stream: {}", e);
             BASS_StreamFree(input_stream);
-            (ptp.stop)();
             BASS_PluginFree(plugin);
             BASS_Free();
             return;
@@ -290,7 +274,7 @@ fn main() {
         println!("  Output stream started");
 
         println!("\n==========================================");
-        println!("Loopback running:");
+        println!("Loopback running ({} sync):", clock_mode.name());
         println!("  INPUT:  239.192.76.49:5004 (Livewire source)");
         println!("  OUTPUT: 239.192.1.100:5004 (200 pkt/sec)");
         println!("==========================================");
@@ -307,12 +291,17 @@ fn main() {
                 break;
             }
 
-            // Get PTP stats
-            let mut ptp_buffer = [0i8; 256];
-            (ptp.get_stats_string)(ptp_buffer.as_mut_ptr(), 256);
-            let ptp_stats = std::ffi::CStr::from_ptr(ptp_buffer.as_ptr())
-                .to_string_lossy()
-                .into_owned();
+            // Get clock stats from BASS config API
+            let clock_stats = {
+                let stats_ptr = BASS_GetConfigPtr(BASS_CONFIG_AES67_PTP_STATS) as *const c_char;
+                if !stats_ptr.is_null() {
+                    std::ffi::CStr::from_ptr(stats_ptr)
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    format!("{}: (stats unavailable)", clock_mode.name())
+                }
+            };
 
             // Get detailed jitter buffer stats
             let buffer_packets = BASS_GetConfig(BASS_CONFIG_AES67_BUFFER_PACKETS);
@@ -346,7 +335,7 @@ fn main() {
             // Get output stats
             let output_stats = output_stream.stats();
 
-            // Display enhanced status on two lines for clarity
+            // Display enhanced status
             print!("\r\x1b[K");
             print!("IN: {}/{} rcv={} late={} und={} | OUT: pkt={} und={} | {} | {}",
                 buffer_packets,
@@ -356,7 +345,7 @@ fn main() {
                 jitter_underruns,
                 output_stats.packets_sent,
                 output_stats.underruns,
-                ptp_stats,
+                clock_stats,
                 trend);
             use std::io::Write;
             std::io::stdout().flush().unwrap();
@@ -366,19 +355,28 @@ fn main() {
 
         // Cleanup
         println!("\n\nCleaning up...");
+        println!("  Stopping output stream...");
         output_stream.stop();
+        println!("  Output stream stopped");
         // Give threads time to exit cleanly
         thread::sleep(Duration::from_millis(200));
+        println!("  Freeing input stream...");
         BASS_StreamFree(input_stream);
+        println!("  Input stream freed");
         // Give input receiver thread time to exit (100ms socket timeout + margin)
         thread::sleep(Duration::from_millis(200));
-        (ptp.stop)();
+        // Clock is stopped automatically when bass_aes67 plugin unloads
+        println!("  Unloading plugin...");
         BASS_PluginFree(plugin);
+        println!("  Plugin unloaded");
+        println!("  Freeing BASS...");
         BASS_Free();
+        println!("  BASS freed");
 
         // Final stats
         let final_stats = output_stream.stats();
         println!("\nFinal Statistics:");
+        println!("  Clock mode: {}", clock_mode.name());
         println!("  Packets sent: {}", final_stats.packets_sent);
         println!("  Samples sent: {}", final_stats.samples_sent);
         println!("  Send errors: {}", final_stats.send_errors);

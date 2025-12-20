@@ -333,17 +333,17 @@ impl Aes67Stream {
         let trim = KP * error + KI * self.integral_error;
         let trim_clamped = trim.clamp(-MAX_TRIM_PPM / 1e6, MAX_TRIM_PPM / 1e6);
 
-        // PTP feedforward: match output's consumption rate when PTP is locked
+        // Clock feedforward: match output's consumption rate when clock is locked
         // Output uses interval_factor = 1.0 - (ppm / 1e6), so it sends FASTER when ppm > 0
         // We need to consume FASTER too, so add ppm to our ratio
-        let ptp_feedforward = if crate::ptp_bindings::ptp_is_locked() {
-            let ppm = crate::ptp_bindings::ptp_get_frequency_ppm();
+        let clock_feedforward = if crate::clock_bindings::clock_is_locked() {
+            let ppm = crate::clock_bindings::clock_get_frequency_ppm();
             ppm / 1_000_000.0
         } else {
-            0.0  // No feedforward during PTP calibration
+            0.0  // No feedforward during clock calibration
         };
 
-        let resample_ratio = 1.0 + ptp_feedforward + trim_clamped;
+        let resample_ratio = 1.0 + clock_feedforward + trim_clamped;
 
         // Initialize resampling state if needed
         if !self.resample_init {

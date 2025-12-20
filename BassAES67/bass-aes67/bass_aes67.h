@@ -38,15 +38,24 @@ extern "C" {
 #define BASS_CONFIG_AES67_TARGET_PACKETS    0x20015  // Target buffer level in packets
 #define BASS_CONFIG_AES67_PACKET_TIME       0x20016  // Detected packet time in microseconds
 
-// PTP status (read-only)
-#define BASS_CONFIG_AES67_PTP_LOCKED    0x20017  // PTP locked status (0=no, 1=yes)
-#define BASS_CONFIG_AES67_PTP_FREQ      0x20018  // PTP frequency PPM x 1000 (i32)
+// PTP/Clock status (read-only)
+#define BASS_CONFIG_AES67_PTP_LOCKED    0x20017  // Clock locked status (0=no, 1=yes)
+#define BASS_CONFIG_AES67_PTP_FREQ      0x20018  // Clock frequency PPM x 1000 (i32)
 
-// PTP state values (for BASS_CONFIG_AES67_PTP_STATE)
-#define BASS_AES67_PTP_DISABLED     0  // PTP not running
+// Clock settings
+#define BASS_CONFIG_AES67_CLOCK_MODE            0x20019  // Clock mode (see BASS_AES67_CLOCK_*)
+#define BASS_CONFIG_AES67_CLOCK_FALLBACK_TIMEOUT 0x2001A // Fallback timeout in seconds (0=disabled, default 5)
+
+// Clock mode values (for BASS_CONFIG_AES67_CLOCK_MODE)
+#define BASS_AES67_CLOCK_PTP        0  // IEEE 1588v2 PTP (default)
+#define BASS_AES67_CLOCK_LIVEWIRE   1  // Axia Livewire Clock
+#define BASS_AES67_CLOCK_SYSTEM     2  // System clock (free-running, no sync)
+
+// Clock state values (for BASS_CONFIG_AES67_PTP_STATE)
+#define BASS_AES67_PTP_DISABLED     0  // Clock not running
 #define BASS_AES67_PTP_LISTENING    1  // Waiting for master
 #define BASS_AES67_PTP_UNCALIBRATED 2  // Syncing with master
-#define BASS_AES67_PTP_SLAVE        3  // Locked to master
+#define BASS_AES67_PTP_SLAVE        3  // Locked to master (or fallback active)
 
 #ifdef __cplusplus
 }

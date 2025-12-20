@@ -166,7 +166,9 @@ pub fn stop_lw_client() {
     force_stop_lw_client();
 }
 
-/// Force stop regardless of reference count
+/// Force stop regardless of reference count.
+/// This version signals thread to stop but does NOT join it.
+/// Safe to call from DllMain where joining threads would deadlock.
 pub fn force_stop_lw_client() {
     REF_COUNT.store(0, Ordering::SeqCst);
 
@@ -175,13 +177,18 @@ pub fn force_stop_lw_client() {
         None => return,
     };
 
+    // Signal thread to stop - do NOT join (unsafe in DllMain context)
     let mut client_guard = client_mutex.lock();
 
-    if let Some(mut handle) = client_guard.take() {
+    if let Some(ref handle) = *client_guard {
         handle.running.store(false, Ordering::SeqCst);
-        if let Some(thread) = handle.thread.take() {
-            let _ = thread.join();
-        }
+    }
+
+    // Take the handle but don't join - let thread terminate on its own
+    // The thread will see running=false and exit after its socket timeout
+    if let Some(mut handle) = client_guard.take() {
+        // Drop thread handle without joining - it'll terminate naturally
+        drop(handle.thread.take());
     }
 
     // Update stats to disabled

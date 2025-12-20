@@ -15,7 +15,7 @@ use socket2::{Socket, Domain, Type, Protocol, SockAddr};
 
 use super::rtp::RtpPacketBuilder;
 use crate::ffi::DWORD;
-use crate::ptp_bindings::{init_ptp_bindings, ptp_get_frequency_ppm};
+use crate::clock_bindings::{init_clock_bindings, clock_get_frequency_ppm};
 
 // FFI import for BASS_ChannelGetData
 #[link(name = "bass")]
@@ -113,8 +113,8 @@ pub struct Aes67OutputStream {
 impl Aes67OutputStream {
     /// Create a new AES67 output stream.
     pub fn new(source_channel: DWORD, config: Aes67OutputConfig) -> Result<Self, String> {
-        // Initialize PTP bindings for frequency adjustment
-        init_ptp_bindings();
+        // Initialize clock bindings for frequency adjustment
+        init_clock_bindings();
 
         // Calculate samples per packet based on packet time
         let samples_per_packet = (config.sample_rate as u64 * config.packet_time_us as u64 / 1_000_000) as usize;
@@ -262,12 +262,12 @@ impl Aes67OutputStream {
         let mut current_ppm = 0.0f64;
 
 
-        while running.load(Ordering::Relaxed) {
+        while running.load(Ordering::SeqCst) {
             // Update PPM every 100 packets to avoid overhead
             ppm_update_counter += 1;
             if ppm_update_counter >= 100 {
                 ppm_update_counter = 0;
-                current_ppm = ptp_get_frequency_ppm();
+                current_ppm = clock_get_frequency_ppm();
                 current_ppm_x1000.store((current_ppm * 1000.0) as i64, Ordering::Relaxed);
             }
 
