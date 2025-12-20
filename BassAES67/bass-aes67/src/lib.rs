@@ -485,8 +485,9 @@ unsafe extern "system" fn stream_create_url(
         return 0;
     }
 
-    // Start clock client if enabled and interface is configured
-    if CONFIG_PTP_ENABLED != 0 {
+    // Start clock client if enabled, interface is configured, and clock not already running
+    // (Clock may have been started via BASS_AES67_ClockStart)
+    if CONFIG_PTP_ENABLED != 0 && !clock_bindings::clock_is_running() {
         if let Some(iface) = config.interface {
             let mode = clock_bindings::ClockMode::from(CONFIG_CLOCK_MODE);
             let _ = clock_bindings::clock_start(iface, CONFIG_PTP_DOMAIN as u8, mode);
@@ -532,8 +533,9 @@ unsafe extern "system" fn stream_create_url(
         return 0;
     }
 
-    // Store handle in stream for later reference
+    // Store handle and flags in stream for later reference
     (*stream_ptr).handle = handle;
+    (*stream_ptr).stream_flags = stream_flags;
 
     // Store global reference for buffer level queries (used by drift compensation)
     ACTIVE_STREAM.store(stream_ptr, Ordering::Release);
@@ -560,6 +562,205 @@ pub unsafe extern "system" fn BASSplugin(face: DWORD) -> *const c_void {
         BASSPLUGIN_CREATEURL => stream_create_url as *const c_void,
         _ => ptr::null(),
     }
+}
+
+/// Start clock independently for output-only mode
+/// Requires BASS_CONFIG_AES67_INTERFACE to be set first via BASS_SetConfigPtr
+/// Returns 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_AES67_ClockStart() -> i32 {
+    if !INITIALIZED.load(Ordering::SeqCst) {
+        return 0;
+    }
+
+    // Get interface from config
+    let iface_str = std::str::from_utf8(&CONFIG_INTERFACE)
+        .ok()
+        .and_then(|s| s.trim_end_matches('\0').parse::<std::net::Ipv4Addr>().ok());
+
+    if let Some(iface) = iface_str {
+        let mode = clock_bindings::ClockMode::from(CONFIG_CLOCK_MODE);
+        match clock_bindings::clock_start(iface, CONFIG_PTP_DOMAIN as u8, mode) {
+            Ok(_) => 1,
+            Err(_) => 0,
+        }
+    } else {
+        0 // No interface configured
+    }
+}
+
+/// Stop clock
+/// Returns 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_AES67_ClockStop() -> i32 {
+    if !INITIALIZED.load(Ordering::SeqCst) {
+        return 0;
+    }
+    clock_bindings::clock_stop();
+    1
+}
+
+// =============================================================================
+// AES67 OUTPUT STREAM FFI
+// =============================================================================
+
+/// FFI-compatible output configuration
+#[repr(C)]
+pub struct Aes67OutputConfigFFI {
+    /// Multicast IP as 4 bytes (a.b.c.d)
+    pub multicast_addr: [u8; 4],
+    /// UDP port
+    pub port: u16,
+    /// Interface IP as 4 bytes (0.0.0.0 for default)
+    pub interface_addr: [u8; 4],
+    /// RTP payload type
+    pub payload_type: u8,
+    /// Number of channels
+    pub channels: u16,
+    /// Sample rate in Hz
+    pub sample_rate: u32,
+    /// Packet time in microseconds
+    pub packet_time_us: u32,
+}
+
+/// FFI-compatible output statistics
+#[repr(C)]
+pub struct OutputStatsFFI {
+    pub packets_sent: u64,
+    pub samples_sent: u64,
+    pub send_errors: u64,
+    pub underruns: u64,
+}
+
+/// Create an AES67 output stream
+/// Returns opaque handle (pointer), or null on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_AES67_OutputCreate(
+    bass_channel: DWORD,
+    config: *const Aes67OutputConfigFFI,
+) -> *mut c_void {
+    if !INITIALIZED.load(Ordering::SeqCst) || config.is_null() {
+        return ptr::null_mut();
+    }
+
+    let cfg = &*config;
+
+    // Convert FFI config to Rust config
+    let rust_config = Aes67OutputConfig {
+        multicast_addr: Ipv4Addr::new(
+            cfg.multicast_addr[0],
+            cfg.multicast_addr[1],
+            cfg.multicast_addr[2],
+            cfg.multicast_addr[3],
+        ),
+        port: cfg.port,
+        interface: if cfg.interface_addr == [0, 0, 0, 0] {
+            None
+        } else {
+            Some(Ipv4Addr::new(
+                cfg.interface_addr[0],
+                cfg.interface_addr[1],
+                cfg.interface_addr[2],
+                cfg.interface_addr[3],
+            ))
+        },
+        payload_type: cfg.payload_type,
+        channels: cfg.channels,
+        sample_rate: cfg.sample_rate,
+        packet_time_us: cfg.packet_time_us,
+    };
+
+    // Create output stream
+    match Aes67OutputStream::new(bass_channel, rust_config) {
+        Ok(stream) => Box::into_raw(Box::new(stream)) as *mut c_void,
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Start the output stream (begins transmitting)
+/// Returns 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_AES67_OutputStart(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let stream = &mut *(handle as *mut Aes67OutputStream);
+    match stream.start() {
+        Ok(_) => 1,
+        Err(_) => 0,
+    }
+}
+
+/// Stop the output stream (stops transmitting, can be restarted)
+/// Returns 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_AES67_OutputStop(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let stream = &mut *(handle as *mut Aes67OutputStream);
+    stream.stop();
+    1
+}
+
+/// Get output stream statistics (lock-free)
+/// Returns 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_AES67_OutputGetStats(
+    handle: *mut c_void,
+    stats: *mut OutputStatsFFI,
+) -> i32 {
+    if handle.is_null() || stats.is_null() {
+        return 0;
+    }
+
+    let stream = &*(handle as *mut Aes67OutputStream);
+    let rust_stats = stream.stats();
+
+    (*stats).packets_sent = rust_stats.packets_sent;
+    (*stats).samples_sent = rust_stats.samples_sent;
+    (*stats).send_errors = rust_stats.send_errors;
+    (*stats).underruns = rust_stats.underruns;
+    1
+}
+
+/// Check if output is running
+/// Returns 1 if running, 0 if not
+#[no_mangle]
+pub unsafe extern "system" fn BASS_AES67_OutputIsRunning(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let stream = &*(handle as *mut Aes67OutputStream);
+    if stream.is_running() { 1 } else { 0 }
+}
+
+/// Get applied PPM frequency correction (x1000 for precision)
+/// Returns PPM * 1000, or 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_AES67_OutputGetPPM(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let stream = &*(handle as *mut Aes67OutputStream);
+    (stream.applied_ppm() * 1000.0) as i32
+}
+
+/// Destroy the output stream and free resources
+/// Returns 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_AES67_OutputFree(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    // Take ownership and drop (stop() is called in Drop impl)
+    let _ = Box::from_raw(handle as *mut Aes67OutputStream);
+    1
 }
 
 /// DLL initialization (Windows)

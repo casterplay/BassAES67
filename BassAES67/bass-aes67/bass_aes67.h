@@ -57,6 +57,48 @@ extern "C" {
 #define BASS_AES67_PTP_UNCALIBRATED 2  // Syncing with master
 #define BASS_AES67_PTP_SLAVE        3  // Locked to master (or fallback active)
 
+// Clock control functions (for output-only mode without input streams)
+// Set BASS_CONFIG_AES67_INTERFACE, BASS_CONFIG_AES67_CLOCK_MODE, and
+// BASS_CONFIG_AES67_PTP_DOMAIN before calling BASS_AES67_ClockStart()
+
+BOOL BASSDEF(BASS_AES67_ClockStart)();  // Start clock (returns TRUE on success)
+BOOL BASSDEF(BASS_AES67_ClockStop)();   // Stop clock (returns TRUE on success)
+
+// =============================================================================
+// AES67 OUTPUT STREAM
+// =============================================================================
+
+// Output stream configuration (must match Rust Aes67OutputConfigFFI)
+typedef struct {
+    BYTE multicast_addr[4];   // Multicast IP as bytes (a.b.c.d)
+    WORD port;                // UDP port (typically 5004)
+    BYTE interface_addr[4];   // Interface IP as bytes (0.0.0.0 for default)
+    BYTE payload_type;        // RTP payload type (typically 96)
+    WORD channels;            // Number of audio channels
+    DWORD sample_rate;        // Sample rate in Hz (typically 48000)
+    DWORD packet_time_us;     // Packet time in microseconds (250, 1000, 5000)
+} BASS_AES67_OUTPUT_CONFIG;
+
+// Output stream statistics (must match Rust OutputStatsFFI)
+typedef struct {
+    QWORD packets_sent;       // Total packets transmitted
+    QWORD samples_sent;       // Total samples transmitted
+    QWORD send_errors;        // Transmission errors
+    QWORD underruns;          // Buffer underruns
+} BASS_AES67_OUTPUT_STATS;
+
+// Output stream handle (opaque pointer)
+typedef void* HAES67OUTPUT;
+
+// Output stream functions
+HAES67OUTPUT BASSDEF(BASS_AES67_OutputCreate)(DWORD bass_channel, const BASS_AES67_OUTPUT_CONFIG* config);
+BOOL BASSDEF(BASS_AES67_OutputStart)(HAES67OUTPUT handle);
+BOOL BASSDEF(BASS_AES67_OutputStop)(HAES67OUTPUT handle);
+BOOL BASSDEF(BASS_AES67_OutputGetStats)(HAES67OUTPUT handle, BASS_AES67_OUTPUT_STATS* stats);
+BOOL BASSDEF(BASS_AES67_OutputIsRunning)(HAES67OUTPUT handle);
+DWORD BASSDEF(BASS_AES67_OutputGetPPM)(HAES67OUTPUT handle);  // Returns PPM x 1000
+BOOL BASSDEF(BASS_AES67_OutputFree)(HAES67OUTPUT handle);
+
 #ifdef __cplusplus
 }
 #endif

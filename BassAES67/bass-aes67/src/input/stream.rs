@@ -71,6 +71,8 @@ pub struct Aes67Stream {
     smoothed_ratio: f64,
     /// Smoothed PTP ppm value (for gradual correction)
     last_ptp_ppm: f64,
+    /// BASS stream flags (BASS_STREAM_DECODE, etc.) - stored for get_info
+    pub stream_flags: DWORD,
 }
 
 impl Aes67Stream {
@@ -107,6 +109,7 @@ impl Aes67Stream {
             integral_error: 0.0,
             smoothed_ratio: 1.0,
             last_ptp_ppm: 0.0,
+            stream_flags: 0,  // Will be set by lib.rs after creation
         })
     }
 
@@ -508,7 +511,8 @@ unsafe extern "system" fn addon_get_info(inst: *mut c_void, info: *mut BassChann
 
     (*info).freq = cfg.sample_rate;
     (*info).chans = cfg.channels as DWORD;
-    (*info).flags = BASS_SAMPLE_FLOAT;
+    // Include stored stream flags (BASS_STREAM_DECODE, etc.) along with BASS_SAMPLE_FLOAT
+    (*info).flags = stream.stream_flags | BASS_SAMPLE_FLOAT;
     (*info).ctype = BASS_CTYPE_STREAM_AES67;
     (*info).origres = 24;
     (*info).plugin = 0;
