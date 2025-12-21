@@ -65,7 +65,7 @@ pub const BASS_POS_BYTE: DWORD = 0;
 pub const BASS_CTYPE_STREAM: DWORD = 0x10000;
 
 // Custom channel type for AES67
-pub const BASS_CTYPE_STREAM_AES67: DWORD = 0x1f000;
+pub const BASS_CTYPE_STREAM_AES67: DWORD = 0x1f200;
 
 /// Channel info structure returned by BASS_ChannelGetInfo
 #[repr(C)]

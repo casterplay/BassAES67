@@ -58,7 +58,7 @@ public class AudioEngine
             Console.WriteLine($"ERROR - Failed to load {aes67Lib}: {Bass.BASS_ErrorGetCode()}");
             return;
         }
-        Console.WriteLine($"OK - BASS_PluginLoad bass_aes67: {Bass.BASS_ErrorGetCode()}");
+        Console.WriteLine($"OK - BASS_PluginLoad {aes67Lib}: {Bass.BASS_ErrorGetCode()}");
 
 
     }

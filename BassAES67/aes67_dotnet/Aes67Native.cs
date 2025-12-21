@@ -5,7 +5,8 @@ using System.Runtime.InteropServices;
 /// All constants from bass_aes67.h for direct BASS function calls
 /// </summary>
 public static class Aes67Native
-{
+{   
+
     // Channel type
     public const int BASS_CTYPE_STREAM_AES67 = 0x1f200;
 
@@ -56,9 +57,26 @@ public static class Aes67Native
     [DllImport("bass")]
     public static extern IntPtr BASS_GetConfigPtr(int option);
 
+    // Direct P/Invoke for BASS_StreamCreateURL - bypasses Bass.NET
+    // Use this to test if Bass.NET wrapper is causing the hang
+    [DllImport("bass", EntryPoint = "BASS_StreamCreateURL", CharSet = CharSet.Ansi)]
+    public static extern int BASS_StreamCreateURL_Direct(
+        [MarshalAs(UnmanagedType.LPStr)] string url,
+        int offset,
+        int flags,
+        IntPtr proc,
+        IntPtr user);
+
+    // BASS flag for decode mode
+    public const int BASS_STREAM_DECODE = 0x200000;
+
     // Clock control functions (for output-only mode without input streams)
     // Set BASS_CONFIG_AES67_INTERFACE, BASS_CONFIG_AES67_CLOCK_MODE, and
     // BASS_CONFIG_AES67_PTP_DOMAIN before calling BASS_AES67_ClockStart()
+
+
+
+    
 
     /// <summary>
     /// Start clock independently (for output-only mode without AES67 input streams)
@@ -71,6 +89,28 @@ public static class Aes67Native
     /// </summary>
     [DllImport("bass_aes67")]
     public static extern bool BASS_AES67_ClockStop();
+
+    /// <summary>
+    /// Check if clock is locked (stable synchronization)
+    /// </summary>
+    [DllImport("bass_aes67")]
+    public static extern int BASS_AES67_ClockIsLocked();
+
+    /// <summary>
+    /// Get detailed clock stats string (master ID, offset, delay, frequency, state)
+    /// Returns pointer to null-terminated string, valid until next call
+    /// </summary>
+    [DllImport("bass_aes67")]
+    public static extern IntPtr BASS_AES67_GetClockStats();
+
+    /// <summary>
+    /// Get clock stats as managed string
+    /// </summary>
+    public static string? GetClockStats()
+    {
+        IntPtr ptr = BASS_AES67_GetClockStats();
+        return ptr == IntPtr.Zero ? null : Marshal.PtrToStringAnsi(ptr);
+    }
 
     /// <summary>
     /// Get string value from pointer config option

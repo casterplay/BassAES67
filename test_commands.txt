@@ -1,0 +1,6 @@
+
+cd ~/dev/BassAES67/BassAES67/bass-aes67
+
+sudo LD_LIBRARY_PATH=./target/release ./target/release/examples/aes67_loopback sys
+sudo LD_LIBRARY_PATH=./target/release ./target/release/examples/aes67_loopback ptp
+sudo LD_LIBRARY_PATH=./target/release ./target/release/examples/aes67_loopback lw

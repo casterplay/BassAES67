@@ -3,8 +3,8 @@ using Un4seen.Bass;
 using Un4seen.Bass.AddOn.Mix;
 
 // Parse command line args
-string clockMode = args.Length > 0 ? args[0].ToLower() : "sys";
-string interfaceIp = args.Length > 1 ? args[1] : "192.168.60.102";
+string clockMode = args.Length > 0 ? args[0].ToLower() : "sys"; // NOT USED!
+string interfaceIp = args.Length > 1 ? args[1] : "192.168.60.104";
 string inputMulticast = args.Length > 2 ? args[2] : "239.192.76.49";
 string outputMulticast = args.Length > 3 ? args[3] : "239.192.1.100";
 
@@ -31,30 +31,7 @@ Console.WriteLine($"AES67 configured (interface={interfaceIp}, jitter=10ms, doma
 // Start clock WITHOUT needing an AES67 input stream!
 Aes67Native.BASS_AES67_ClockStart();
 
-// Create input stream (decode mode)
 
-
-Console.WriteLine("Creating AES67 input stream...");
-string inputUrl = $"aes67://{inputMulticast}:5004";
-int inputStream = Bass.BASS_StreamCreateURL(inputUrl, 0, BASSFlag.BASS_STREAM_DECODE, null, IntPtr.Zero);
-if (inputStream == 0)
-{
-    Console.WriteLine($"ERROR - Failed to create input stream: {Bass.BASS_ErrorGetCode()}");
-    return;
-}
-Console.WriteLine($"Input stream created (source: {inputMulticast}:5004)\n");
-
-//Add inputStream stream to mixer
-BassMix.BASS_Mixer_StreamAddChannel(mixer, inputStream, BASSFlag.BASS_STREAM_AUTOFREE);
-Console.WriteLine($"BASS_Mixer_StreamAddChannel: {Bass.BASS_ErrorGetCode()}");
-
-/*
-int testChannel = Bass.BASS_StreamCreateURL("https://live1.sr.se/p4malm-aac-128", 0, BASSFlag.BASS_STREAM_DECODE, null, IntPtr.Zero);
-
-//Add testChannel stream to mixer
-BassMix.BASS_Mixer_StreamAddChannel(mixer, testChannel, BASSFlag.BASS_STREAM_AUTOFREE);
-Console.WriteLine($"BASS_Mixer_StreamAddChannel: {Bass.BASS_ErrorGetCode()}");
-*/
 
 // Wait for clock lock
 Console.WriteLine($"Waiting for {Aes67Native.GetClockModeName(clockModeValue)} lock...");
@@ -79,6 +56,31 @@ for (int i = 0; i < lockWaitSeconds * 10; i++)
     }
 }
 Console.WriteLine();
+
+// Create input stream (decode mode)
+
+
+
+string inputUrl = $"aes67://{inputMulticast}:5004";
+Console.WriteLine($"Creating AES67 input stream... {inputUrl}");
+Console.WriteLine("Using direct P/Invoke (bypassing Bass.NET)...");
+int inputStream = Aes67Native.BASS_StreamCreateURL_Direct(inputUrl, 0, Aes67Native.BASS_STREAM_DECODE, IntPtr.Zero, IntPtr.Zero);
+Console.WriteLine($"BASS_StreamCreateURL (aes67 plugin): {Bass.BASS_ErrorGetCode()}, handle={inputStream}");
+
+//Add inputStream stream to mixer
+BassMix.BASS_Mixer_StreamAddChannel(mixer, inputStream, BASSFlag.BASS_STREAM_AUTOFREE);
+Console.WriteLine($"BASS_Mixer_StreamAddChannel: {Bass.BASS_ErrorGetCode()}");
+
+
+// THIS CODE WORKS, it plays
+/*
+int testChannel = Bass.BASS_StreamCreateURL("https://live1.sr.se/p4malm-aac-128", 0, BASSFlag.BASS_STREAM_DECODE, null, IntPtr.Zero);
+
+//Add testChannel stream to mixer
+BassMix.BASS_Mixer_StreamAddChannel(mixer, testChannel, BASSFlag.BASS_STREAM_AUTOFREE);
+Console.WriteLine($"BASS_Mixer_StreamAddChannel: {Bass.BASS_ErrorGetCode()}");
+*/
+
 
 // Wait for input buffer to fill (>50%)
 Console.WriteLine("Waiting for input buffer...");
@@ -134,21 +136,20 @@ while (!cts.Token.IsCancellationRequested)
     int packetsLate = Bass.BASS_GetConfig((BASSConfig)Aes67Native.BASS_CONFIG_AES67_PACKETS_LATE);
     int underruns = Bass.BASS_GetConfig((BASSConfig)Aes67Native.BASS_CONFIG_AES67_JITTER_UNDERRUNS);
 
-    // Get clock stats
+    // Get clock stats (use direct function for detailed stats)
     int clockLocked = Bass.BASS_GetConfig((BASSConfig)Aes67Native.BASS_CONFIG_AES67_PTP_LOCKED);
     int clockState = Bass.BASS_GetConfig((BASSConfig)Aes67Native.BASS_CONFIG_AES67_PTP_STATE);
-    string? clockStats = Aes67Native.GetConfigString(Aes67Native.BASS_CONFIG_AES67_PTP_STATS);
+    string? clockStats = Aes67Native.GetClockStats();
 
     // Get output stats
     long outPackets = outputStream.PacketsSent;
     long outUnderruns = outputStream.Underruns;
 
-
-    // Display stats
-    string lockStatus = clockLocked != 0 ? "LOCKED" : Aes67Native.GetClockStateName(clockState);
+    // Display stats - use detailed clock stats if available, otherwise fallback to simple status
+    string lockStatus = clockStats ?? (clockLocked != 0 ? "LOCKED" : Aes67Native.GetClockStateName(clockState));
     Console.Write($"\rIN: {bufferLevel}/{targetPackets} rcv={packetsReceived} late={packetsLate} und={underruns} | ");
     Console.Write($"OUT: pkt={outPackets} und={outUnderruns} | ");
-    Console.Write($"{Aes67Native.GetClockModeName(clockModeValue)} {lockStatus}   ");
+    Console.Write($"{lockStatus}   ");
 
     try
     {

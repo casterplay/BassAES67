@@ -92,11 +92,12 @@ pub fn clear_active_stream(stream_ptr: *mut Aes67Stream) {
 }
 
 /// Plugin format information - defines what formats this plugin handles
+/// For URL schemes, the exts field should contain the scheme (e.g., "aes67://")
 static PLUGIN_FORMATS: [BassPluginForm; 1] = [
     BassPluginForm {
         ctype: BASS_CTYPE_STREAM_AES67,
         name: b"AES67 Network Audio\0".as_ptr() as *const i8,
-        exts: b"*.aes67\0".as_ptr() as *const i8, // Dummy extension, we use URL scheme
+        exts: b"aes67://\0".as_ptr() as *const i8, // URL scheme
     },
 ];
 
@@ -854,12 +855,10 @@ static INIT: extern "C" fn() = {
         unsafe {
             let version = BASS_GetVersion();
             if (version >> 16) != BASSVERSION {
-                eprintln!("BASS_AES67: Incorrect BASS version (2.4 required)");
                 return;
             }
 
             if get_bass_func().is_none() {
-                eprintln!("BASS_AES67: Failed to get BASS functions");
                 return;
             }
 

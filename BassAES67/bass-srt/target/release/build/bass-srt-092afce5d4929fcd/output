@@ -1,0 +1,3 @@
+cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu
+cargo:rustc-link-lib=dylib=srt-gnutls
+cargo:rustc-link-search=native=/home/kennet/dev/BassAES67/BassAES67/bass-aes67/target/release

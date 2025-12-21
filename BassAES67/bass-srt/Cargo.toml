@@ -1,0 +1,32 @@
+[package]
+name = "bass-srt"
+version = "0.1.0"
+edition = "2021"
+description = "SRT (Secure Reliable Transport) input/output plugin for BASS audio library"
+license = "MIT"
+
+[lib]
+# cdylib = shared library (.dll on Windows, .so on Linux)
+# rlib = rust library for examples to link against
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ringbuf = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }
+
+[[example]]
+name = "test_srt_input"
+path = "examples/test_srt_input.rs"
+
+[[example]]
+name = "srt_sender"
+path = "examples/srt_sender.rs"
+
+[[example]]
+name = "srt_sender_framed"
+path = "examples/srt_sender_framed.rs"
+
+[build-dependencies]
+# No build dependencies needed - direct linking

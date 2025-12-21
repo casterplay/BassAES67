@@ -10,17 +10,16 @@
         "projectUniqueName": "/home/kennet/dev/BassAES67/BassAES67/aes67_dotnet/aes67_dotnet.csproj",
         "projectName": "aes67_dotnet",
         "projectPath": "/home/kennet/dev/BassAES67/BassAES67/aes67_dotnet/aes67_dotnet.csproj",
-        "packagesPath": "/home/kennet/.nuget/packages/",
+        "packagesPath": "/root/.nuget/packages/",
         "outputPath": "/home/kennet/dev/BassAES67/BassAES67/aes67_dotnet/obj/",
         "projectStyle": "PackageReference",
         "configFilePaths": [
-          "/home/kennet/.nuget/NuGet/NuGet.Config"
+          "/root/.nuget/NuGet/NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net10.0"
         ],
         "sources": {
-          "/home/kennet/dev/nugets": {},
           "/usr/lib/dotnet/library-packs": {},
           "https://api.nuget.org/v3/index.json": {}
         },
