@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo build:*)"
+      "Bash(cargo build:*)",
+      "Bash(./target/release/examples/aes67_loopback:*)",
+      "Bash(LD_LIBRARY_PATH=./target/release ./target/release/examples/aes67_loopback:*)"
     ]
   }
 }

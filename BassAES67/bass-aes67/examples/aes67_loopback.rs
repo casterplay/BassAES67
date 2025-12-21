@@ -24,9 +24,122 @@ use std::env;
 use std::ffi::{c_char, c_void, CString};
 use std::net::Ipv4Addr;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::thread;
 use std::time::Duration;
+
+// Function pointer types for plugin functions
+type ClockIsLockedFn = unsafe extern "system" fn() -> i32;
+type GetClockStatsFn = unsafe extern "system" fn() -> *const c_char;
+
+// Global pointers to loaded functions (set after dlopen/LoadLibrary)
+static CLOCK_IS_LOCKED_FN: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+static GET_CLOCK_STATS_FN: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Check if clock is locked using direct plugin function
+fn clock_is_locked() -> bool {
+    let ptr = CLOCK_IS_LOCKED_FN.load(Ordering::Relaxed);
+    if ptr.is_null() {
+        // Fallback to BASS_GetConfig if function not loaded
+        unsafe { BASS_GetConfig(BASS_CONFIG_AES67_PTP_LOCKED) != 0 }
+    } else {
+        let func: ClockIsLockedFn = unsafe { std::mem::transmute(ptr) };
+        unsafe { func() != 0 }
+    }
+}
+
+/// Get clock stats string using direct plugin function
+fn get_clock_stats() -> String {
+    let ptr = GET_CLOCK_STATS_FN.load(Ordering::Relaxed);
+    if !ptr.is_null() {
+        let func: GetClockStatsFn = unsafe { std::mem::transmute(ptr) };
+        let stats_ptr = unsafe { func() };
+        if !stats_ptr.is_null() {
+            return unsafe {
+                std::ffi::CStr::from_ptr(stats_ptr)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+        }
+    }
+    // Fallback to BASS_GetConfigPtr
+    unsafe {
+        let stats_ptr = BASS_GetConfigPtr(BASS_CONFIG_AES67_PTP_STATS) as *const c_char;
+        if !stats_ptr.is_null() {
+            std::ffi::CStr::from_ptr(stats_ptr)
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            String::from("(stats unavailable)")
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod plugin_loader {
+    use super::*;
+
+    extern "C" {
+        fn dlopen(filename: *const c_char, flags: i32) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+
+    const RTLD_NOW: i32 = 2;
+    const RTLD_NOLOAD: i32 = 4;  // Get handle to already-loaded library, don't load new instance
+
+    /// Load plugin function pointers via dlsym from the already-loaded library.
+    /// Uses RTLD_NOLOAD to get a handle to the library BASS already loaded,
+    /// ensuring we access the same instance (same static variables).
+    pub fn load_plugin_functions(plugin_name: &str) {
+        unsafe {
+            let c_name = match CString::new(plugin_name) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+
+            // RTLD_NOLOAD returns handle to already-loaded library without loading a new instance
+            let mut handle = dlopen(c_name.as_ptr(), RTLD_NOW | RTLD_NOLOAD);
+            if handle.is_null() {
+                return;  // Library not loaded or not found - fallback paths will be used
+            }
+
+            // Load BASS_AES67_ClockIsLocked
+            let sym_name = CString::new("BASS_AES67_ClockIsLocked").unwrap();
+            let func_ptr = dlsym(handle, sym_name.as_ptr());
+            if !func_ptr.is_null() {
+                CLOCK_IS_LOCKED_FN.store(func_ptr, Ordering::Relaxed);
+            }
+
+            // Load BASS_AES67_GetClockStats
+            let sym_name = CString::new("BASS_AES67_GetClockStats").unwrap();
+            let func_ptr = dlsym(handle, sym_name.as_ptr());
+            if !func_ptr.is_null() {
+                GET_CLOCK_STATS_FN.store(func_ptr, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+mod plugin_loader {
+    // On Windows, BASS_GetConfig/BASS_GetConfigPtr works correctly
+    // No need for dlsym - the fallback code paths handle it
+    pub fn load_plugin_functions(_plugin_name: &str) {
+        // No-op on Windows
+    }
+}
+
+// Platform-specific plugin name
+#[cfg(windows)]
+const PLUGIN_NAME: &str = "bass_aes67.dll";
+#[cfg(not(windows))]
+const PLUGIN_NAME: &str = "libbass_aes67.so";
+
+// Network interface IP (platform-specific for testing)
+#[cfg(windows)]
+const INTERFACE_IP: &str = "192.168.60.102";
+#[cfg(not(windows))]
+const INTERFACE_IP: &str = "192.168.60.104";
 
 // BASS types
 type DWORD = u32;
@@ -154,14 +267,17 @@ fn main() {
         println!("  BASS initialized (device=0, no soundcard)");
 
         // Load AES67 plugin
-        let plugin_path = CString::new("bass_aes67.dll").unwrap();
+        let plugin_path = CString::new(PLUGIN_NAME).unwrap();
         let plugin = BASS_PluginLoad(plugin_path.as_ptr(), 0);
         if plugin == 0 {
-            println!("ERROR: Failed to load bass_aes67.dll (error {})", BASS_ErrorGetCode());
+            println!("ERROR: Failed to load {} (error {})", PLUGIN_NAME, BASS_ErrorGetCode());
             BASS_Free();
             return;
         }
-        println!("  bass_aes67.dll loaded");
+        println!("  {} loaded", PLUGIN_NAME);
+
+        // Load direct plugin functions (needed on Linux where BASS config routing doesn't work)
+        plugin_loader::load_plugin_functions(PLUGIN_NAME);
 
         // Configure AES67
         // Set clock mode BEFORE creating streams
@@ -169,7 +285,7 @@ fn main() {
         println!("  Clock mode set to: {} ({})", clock_mode.name(), clock_mode.config_value());
 
         // Interface for the AoIP network
-        let interface = CString::new("192.168.60.102").unwrap();
+        let interface = CString::new(INTERFACE_IP).unwrap();
         BASS_SetConfigPtr(BASS_CONFIG_AES67_INTERFACE, interface.as_ptr() as *const c_void);
 
         // Livewire uses 200 packets/sec (5ms)
@@ -179,7 +295,7 @@ fn main() {
         // PTP domain 1 for Livewire (ignored in Livewire clock mode)
         BASS_SetConfig(BASS_CONFIG_AES67_PTP_DOMAIN, 1);
 
-        println!("  AES67 configured (interface=192.168.60.102, jitter=10ms, domain=1)");
+        println!("  AES67 configured (interface={}, jitter=10ms, domain=1)", INTERFACE_IP);
 
         // Create AES67 INPUT stream (decode mode - we'll pull audio from it)
         // Note: This will start the clock client automatically based on CLOCK_MODE
@@ -202,10 +318,10 @@ fn main() {
         println!("  Input stream created (handle: {}, source: 239.192.76.49:5004)", input_stream);
         println!("  {} clock started automatically by bass_aes67", clock_mode.name());
 
-        // Wait for clock to lock (use BASS config API)
+        // Wait for clock to lock (use direct plugin function on Linux, BASS config on Windows)
         println!("\nWaiting for {} lock...", clock_mode.name());
         let mut wait_count = 0;
-        while BASS_GetConfig(BASS_CONFIG_AES67_PTP_LOCKED) == 0 && wait_count < 100 {
+        while !clock_is_locked() && wait_count < 100 {
             thread::sleep(Duration::from_millis(100));
             wait_count += 1;
             if wait_count % 10 == 0 {
@@ -214,7 +330,7 @@ fn main() {
                 std::io::stdout().flush().unwrap();
             }
         }
-        if BASS_GetConfig(BASS_CONFIG_AES67_PTP_LOCKED) != 0 {
+        if clock_is_locked() {
             println!("\n  {} locked!", clock_mode.name());
         } else {
             println!("\n  {} not locked yet (continuing anyway)", clock_mode.name());
@@ -223,10 +339,12 @@ fn main() {
         // Create AES67 OUTPUT stream
         // Note: Both input and output use network timing for sync
         println!("\nCreating AES67 output stream...");
+        // Parse interface IP for output config
+        let interface_addr: Ipv4Addr = INTERFACE_IP.parse().unwrap();
         let output_config = bass_aes67::Aes67OutputConfig {
             multicast_addr: Ipv4Addr::new(239, 192, 1, 100),  // Livewire destination
             port: 5004,
-            interface: Some(Ipv4Addr::new(192, 168, 60, 102)),
+            interface: Some(interface_addr),
             payload_type: 96,
             channels: 2,
             sample_rate: 48000,
@@ -291,17 +409,8 @@ fn main() {
                 break;
             }
 
-            // Get clock stats from BASS config API
-            let clock_stats = {
-                let stats_ptr = BASS_GetConfigPtr(BASS_CONFIG_AES67_PTP_STATS) as *const c_char;
-                if !stats_ptr.is_null() {
-                    std::ffi::CStr::from_ptr(stats_ptr)
-                        .to_string_lossy()
-                        .into_owned()
-                } else {
-                    format!("{}: (stats unavailable)", clock_mode.name())
-                }
-            };
+            // Get clock stats (uses direct function on Linux, BASS_GetConfigPtr on Windows)
+            let clock_stats = get_clock_stats();
 
             // Get detailed jitter buffer stats
             let buffer_packets = BASS_GetConfig(BASS_CONFIG_AES67_BUFFER_PACKETS);
@@ -407,6 +516,25 @@ fn ctrlc_handler() {
 
         unsafe {
             SetConsoleCtrlHandler(Some(handler), 1);
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Unix/Linux signal handler for SIGINT (Ctrl+C)
+        extern "C" {
+            fn signal(signum: i32, handler: extern "C" fn(i32)) -> extern "C" fn(i32);
+        }
+
+        const SIGINT: i32 = 2;
+
+        extern "C" fn handler(_: i32) {
+            RUNNING.store(false, Ordering::SeqCst);
+            println!("\n\nShutting down...");
+        }
+
+        unsafe {
+            signal(SIGINT, handler);
         }
     }
 }

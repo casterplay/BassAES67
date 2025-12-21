@@ -158,7 +158,6 @@ struct PtpFunctions {
 }
 
 struct PtpLibrary {
-    #[cfg(windows)]
     _handle: *mut c_void,
     functions: PtpFunctions,
 }
@@ -193,7 +192,6 @@ struct LwFunctions {
 }
 
 struct LwLibrary {
-    #[cfg(windows)]
     _handle: *mut c_void,
     functions: LwFunctions,
 }
@@ -240,7 +238,6 @@ struct SysFunctions {
 }
 
 struct SysLibrary {
-    #[cfg(windows)]
     _handle: *mut c_void,
     functions: SysFunctions,
 }
@@ -444,20 +441,231 @@ mod windows_loader {
 #[cfg(not(windows))]
 mod unix_loader {
     use super::*;
+    use std::ffi::CString;
+
+    // dlopen flags
+    const RTLD_NOW: i32 = 2;
+    const RTLD_LOCAL: i32 = 0;
+
+    extern "C" {
+        fn dlopen(filename: *const i8, flags: i32) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, symbol: *const i8) -> *mut c_void;
+        fn dlclose(handle: *mut c_void) -> i32;
+    }
+
+    /// Try to find the directory containing libbass_ptp.so (and other clock libraries)
+    fn get_lib_directory() -> Option<String> {
+        use std::path::Path;
+
+        // Check if libraries are in the current directory
+        if Path::new("./libbass_ptp.so").exists() {
+            return Some(".".to_string());
+        }
+
+        // Check executable directory and parent directories
+        // This handles running from target/release/examples/ where libs are in target/release/
+        if let Ok(exe_path) = std::env::current_exe() {
+            // Check executable's directory
+            if let Some(dir) = exe_path.parent() {
+                let ptp_path = dir.join("libbass_ptp.so");
+                if ptp_path.exists() {
+                    return Some(dir.to_string_lossy().into_owned());
+                }
+
+                // Check parent directory (for examples/ subdirectory case)
+                if let Some(parent) = dir.parent() {
+                    let ptp_path = parent.join("libbass_ptp.so");
+                    if ptp_path.exists() {
+                        return Some(parent.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+
+        // Also check target/release relative to current working directory
+        if Path::new("target/release/libbass_ptp.so").exists() {
+            return Some("target/release".to_string());
+        }
+
+        None
+    }
+
+    fn load_library(lib_name: &str) -> *mut c_void {
+        unsafe {
+            // Try with directory prefix first (same directory as bass_aes67.so)
+            if let Some(dir) = get_lib_directory() {
+                let full_path = format!("{}/{}", dir, lib_name);
+                if let Ok(c_path) = CString::new(full_path) {
+                    let handle = dlopen(c_path.as_ptr(), RTLD_NOW | RTLD_LOCAL);
+                    if !handle.is_null() {
+                        return handle;
+                    }
+                }
+            }
+
+            // Fall back to letting dlopen search standard paths (LD_LIBRARY_PATH, etc.)
+            let c_name = match CString::new(lib_name) {
+                Ok(s) => s,
+                Err(_) => return std::ptr::null_mut(),
+            };
+            dlopen(c_name.as_ptr(), RTLD_NOW | RTLD_LOCAL)
+        }
+    }
 
     pub fn load_ptp_library() -> Option<PtpLibrary> {
-        // TODO: Implement for Linux/macOS using dlopen
-        None
+        let handle = load_library("libbass_ptp.so");
+        if handle.is_null() {
+            return None;
+        }
+
+        unsafe {
+            macro_rules! load_fn {
+                ($name:expr, $ty:ty) => {{
+                    let c_name = match CString::new($name) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            dlclose(handle);
+                            return None;
+                        }
+                    };
+                    let ptr = dlsym(handle, c_name.as_ptr());
+                    if ptr.is_null() {
+                        dlclose(handle);
+                        return None;
+                    }
+                    std::mem::transmute::<*mut c_void, $ty>(ptr)
+                }};
+            }
+
+            let functions = PtpFunctions {
+                start: load_fn!("BASS_PTP_Start", ClockStartPtpFn),
+                stop: load_fn!("BASS_PTP_Stop", ClockStopFn),
+                force_stop: load_fn!("BASS_PTP_ForceStop", ClockForceStopFn),
+                is_running: load_fn!("BASS_PTP_IsRunning", ClockIsRunningFn),
+                get_offset: load_fn!("BASS_PTP_GetOffset", ClockGetOffsetFn),
+                get_frequency_ppm: load_fn!("BASS_PTP_GetFrequencyPPM", ClockGetFrequencyPpmFn),
+                get_stats_string: load_fn!("BASS_PTP_GetStatsString", ClockGetStatsStringFn),
+                get_version: load_fn!("BASS_PTP_GetVersion", ClockGetVersionFn),
+                get_state: load_fn!("BASS_PTP_GetState", ClockGetStateFn),
+                is_locked: load_fn!("BASS_PTP_IsLocked", ClockIsLockedFn),
+                timer_start: load_fn!("BASS_PTP_TimerStart", ClockTimerStartFn),
+                timer_stop: load_fn!("BASS_PTP_TimerStop", ClockTimerStopFn),
+                timer_is_running: load_fn!("BASS_PTP_TimerIsRunning", ClockTimerIsRunningFn),
+                timer_set_interval: load_fn!("BASS_PTP_TimerSetInterval", ClockTimerSetIntervalFn),
+                timer_get_interval: load_fn!("BASS_PTP_TimerGetInterval", ClockTimerGetIntervalFn),
+                timer_set_pll: load_fn!("BASS_PTP_TimerSetPLL", ClockTimerSetPllFn),
+                timer_is_pll_enabled: load_fn!("BASS_PTP_TimerIsPLLEnabled", ClockTimerIsPllEnabledFn),
+            };
+
+            Some(PtpLibrary {
+                _handle: handle,
+                functions,
+            })
+        }
     }
 
     pub fn load_lw_library() -> Option<LwLibrary> {
-        // TODO: Implement for Linux/macOS using dlopen
-        None
+        let handle = load_library("libbass_livewire_clock.so");
+        if handle.is_null() {
+            return None;
+        }
+
+        unsafe {
+            macro_rules! load_fn {
+                ($name:expr, $ty:ty) => {{
+                    let c_name = match CString::new($name) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            dlclose(handle);
+                            return None;
+                        }
+                    };
+                    let ptr = dlsym(handle, c_name.as_ptr());
+                    if ptr.is_null() {
+                        dlclose(handle);
+                        return None;
+                    }
+                    std::mem::transmute::<*mut c_void, $ty>(ptr)
+                }};
+            }
+
+            let functions = LwFunctions {
+                start: load_fn!("BASS_LW_Start", ClockStartLwFn),
+                stop: load_fn!("BASS_LW_Stop", ClockStopFn),
+                force_stop: load_fn!("BASS_LW_ForceStop", ClockForceStopFn),
+                is_running: load_fn!("BASS_LW_IsRunning", ClockIsRunningFn),
+                get_offset: load_fn!("BASS_LW_GetOffset", ClockGetOffsetFn),
+                get_frequency_ppm: load_fn!("BASS_LW_GetFrequencyPPM", ClockGetFrequencyPpmFn),
+                get_stats_string: load_fn!("BASS_LW_GetStatsString", ClockGetStatsStringFn),
+                get_version: load_fn!("BASS_LW_GetVersion", ClockGetVersionFn),
+                get_state: load_fn!("BASS_LW_GetState", ClockGetStateFn),
+                is_locked: load_fn!("BASS_LW_IsLocked", ClockIsLockedFn),
+                timer_start: load_fn!("BASS_LW_TimerStart", ClockTimerStartFn),
+                timer_stop: load_fn!("BASS_LW_TimerStop", ClockTimerStopFn),
+                timer_is_running: load_fn!("BASS_LW_TimerIsRunning", ClockTimerIsRunningFn),
+                timer_set_interval: load_fn!("BASS_LW_TimerSetInterval", ClockTimerSetIntervalFn),
+                timer_get_interval: load_fn!("BASS_LW_TimerGetInterval", ClockTimerGetIntervalFn),
+                timer_set_pll: load_fn!("BASS_LW_TimerSetPLL", ClockTimerSetPllFn),
+                timer_is_pll_enabled: load_fn!("BASS_LW_TimerIsPLLEnabled", ClockTimerIsPllEnabledFn),
+            };
+
+            Some(LwLibrary {
+                _handle: handle,
+                functions,
+            })
+        }
     }
 
     pub fn load_sys_library() -> Option<SysLibrary> {
-        // TODO: Implement for Linux/macOS using dlopen
-        None
+        let handle = load_library("libbass_system_clock.so");
+        if handle.is_null() {
+            return None;
+        }
+
+        unsafe {
+            macro_rules! load_fn {
+                ($name:expr, $ty:ty) => {{
+                    let c_name = match CString::new($name) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            dlclose(handle);
+                            return None;
+                        }
+                    };
+                    let ptr = dlsym(handle, c_name.as_ptr());
+                    if ptr.is_null() {
+                        dlclose(handle);
+                        return None;
+                    }
+                    std::mem::transmute::<*mut c_void, $ty>(ptr)
+                }};
+            }
+
+            let functions = SysFunctions {
+                start: load_fn!("BASS_SYS_Start", SysStartFn),
+                stop: load_fn!("BASS_SYS_Stop", SysStopFn),
+                force_stop: load_fn!("BASS_SYS_ForceStop", SysForceStopFn),
+                is_running: load_fn!("BASS_SYS_IsRunning", SysIsRunningFn),
+                get_offset: load_fn!("BASS_SYS_GetOffset", SysGetOffsetFn),
+                get_frequency_ppm: load_fn!("BASS_SYS_GetFrequencyPPM", SysGetFrequencyPpmFn),
+                get_stats_string: load_fn!("BASS_SYS_GetStatsString", SysGetStatsStringFn),
+                get_version: load_fn!("BASS_SYS_GetVersion", SysGetVersionFn),
+                get_state: load_fn!("BASS_SYS_GetState", SysGetStateFn),
+                is_locked: load_fn!("BASS_SYS_IsLocked", SysIsLockedFn),
+                timer_start: load_fn!("BASS_SYS_TimerStart", ClockTimerStartFn),
+                timer_stop: load_fn!("BASS_SYS_TimerStop", ClockTimerStopFn),
+                timer_is_running: load_fn!("BASS_SYS_TimerIsRunning", ClockTimerIsRunningFn),
+                timer_set_interval: load_fn!("BASS_SYS_TimerSetInterval", ClockTimerSetIntervalFn),
+                timer_get_interval: load_fn!("BASS_SYS_TimerGetInterval", ClockTimerGetIntervalFn),
+                timer_set_pll: load_fn!("BASS_SYS_TimerSetPLL", ClockTimerSetPllFn),
+                timer_is_pll_enabled: load_fn!("BASS_SYS_TimerIsPLLEnabled", ClockTimerIsPllEnabledFn),
+            };
+
+            Some(SysLibrary {
+                _handle: handle,
+                functions,
+            })
+        }
     }
 }
 

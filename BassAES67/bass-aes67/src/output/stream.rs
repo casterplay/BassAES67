@@ -250,6 +250,18 @@ impl Aes67OutputStream {
             }
         }
 
+        // Set thread priority high for better timing (Linux)
+        #[cfg(target_os = "linux")]
+        {
+            extern "C" {
+                fn nice(inc: i32) -> i32;
+            }
+            // -20 is highest priority for non-root processes
+            unsafe {
+                nice(-20);
+            }
+        }
+
         let ssrc = Self::generate_ssrc();
         let mut rtp = RtpPacketBuilder::new(ssrc, payload_type);
         let buffer_size = samples_per_packet * channels as usize;

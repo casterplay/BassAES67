@@ -600,6 +600,34 @@ pub unsafe extern "system" fn BASS_AES67_ClockStop() -> i32 {
     1
 }
 
+/// Check if clock is locked (stable synchronization)
+/// Returns 1 if locked, 0 if not locked or not initialized
+#[no_mangle]
+pub unsafe extern "system" fn BASS_AES67_ClockIsLocked() -> i32 {
+    if !INITIALIZED.load(Ordering::SeqCst) {
+        return 0;
+    }
+    if clock_bindings::clock_is_locked() { 1 } else { 0 }
+}
+
+/// Get clock stats string (for Linux where BASS_GetConfigPtr may not work)
+/// Returns pointer to static null-terminated string, valid until next call
+#[no_mangle]
+pub unsafe extern "system" fn BASS_AES67_GetClockStats() -> *const i8 {
+    static mut CLOCK_STATS_BUFFER: [u8; 256] = [0; 256];
+
+    if !INITIALIZED.load(Ordering::SeqCst) {
+        return b"Not initialized\0".as_ptr() as *const i8;
+    }
+
+    let stats = clock_bindings::clock_get_stats_string();
+    let bytes = stats.as_bytes();
+    let len = bytes.len().min(255);
+    ptr::copy_nonoverlapping(bytes.as_ptr(), CLOCK_STATS_BUFFER.as_mut_ptr(), len);
+    CLOCK_STATS_BUFFER[len] = 0;
+    CLOCK_STATS_BUFFER.as_ptr() as *const i8
+}
+
 // =============================================================================
 // AES67 OUTPUT STREAM FFI
 // =============================================================================
