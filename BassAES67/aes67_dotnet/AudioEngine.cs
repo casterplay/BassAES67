@@ -35,6 +35,15 @@ public class AudioEngine
 
         Console.WriteLine($"OK - BASS_PluginLoad AAC: {Bass.BASS_ErrorGetCode()}");
 
+        // Load AES67 plugin
+        int pluginHandle = Bass.BASS_PluginLoad("bass_aes67.dll");
+        if (pluginHandle == 0)
+        {
+            Console.WriteLine($"ERROR - Failed to load bass_aes67.dll: {Bass.BASS_ErrorGetCode()}");
+            return;
+        }
+        Console.WriteLine($"OK - BASS_PluginLoad bass_aes67: {Bass.BASS_ErrorGetCode()}");
+
         
     }
 }

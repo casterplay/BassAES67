@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 
 /// <summary>
-/// AES67 constants and P/Invoke declarations for bass_aes67.dll
+/// AES67 constants and P/Invoke declarations for bass_aes67.dll or bass_aes67.so
 /// All constants from bass_aes67.h for direct BASS function calls
 /// </summary>
 public static class Aes67Native
@@ -50,10 +50,10 @@ public static class Aes67Native
     public const int BASS_AES67_PTP_SLAVE = 3;        // Locked to master (or fallback active)
 
     // P/Invoke for string/pointer config (not in Bass.NET wrapper)
-    [DllImport("bass.dll", CharSet = CharSet.Ansi)]
+    [DllImport("bass", CharSet = CharSet.Ansi)]
     public static extern bool BASS_SetConfigPtr(int option, string value);
 
-    [DllImport("bass.dll")]
+    [DllImport("bass")]
     public static extern IntPtr BASS_GetConfigPtr(int option);
 
     // Clock control functions (for output-only mode without input streams)
@@ -63,13 +63,13 @@ public static class Aes67Native
     /// <summary>
     /// Start clock independently (for output-only mode without AES67 input streams)
     /// </summary>
-    [DllImport("bass_aes67.dll")]
+    [DllImport("bass_aes67")]
     public static extern bool BASS_AES67_ClockStart();
 
     /// <summary>
     /// Stop clock
     /// </summary>
-    [DllImport("bass_aes67.dll")]
+    [DllImport("bass_aes67")]
     public static extern bool BASS_AES67_ClockStop();
 
     /// <summary>
@@ -111,43 +111,43 @@ public static class Aes67Native
     /// <summary>
     /// Create an AES67 output stream from a BASS channel
     /// </summary>
-    [DllImport("bass_aes67.dll")]
+    [DllImport("bass_aes67")]
     public static extern IntPtr BASS_AES67_OutputCreate(int bassChannel, ref Aes67OutputConfigFFI config);
 
     /// <summary>
     /// Start the output stream (begins transmitting)
     /// </summary>
-    [DllImport("bass_aes67.dll")]
+    [DllImport("bass_aes67")]
     public static extern bool BASS_AES67_OutputStart(IntPtr handle);
 
     /// <summary>
     /// Stop the output stream (stops transmitting, can be restarted)
     /// </summary>
-    [DllImport("bass_aes67.dll")]
+    [DllImport("bass_aes67")]
     public static extern bool BASS_AES67_OutputStop(IntPtr handle);
 
     /// <summary>
     /// Get output stream statistics (lock-free)
     /// </summary>
-    [DllImport("bass_aes67.dll")]
+    [DllImport("bass_aes67")]
     public static extern bool BASS_AES67_OutputGetStats(IntPtr handle, out OutputStatsFFI stats);
 
     /// <summary>
     /// Check if output is running
     /// </summary>
-    [DllImport("bass_aes67.dll")]
+    [DllImport("bass_aes67")]
     public static extern bool BASS_AES67_OutputIsRunning(IntPtr handle);
 
     /// <summary>
     /// Get applied PPM frequency correction (returns PPM x 1000)
     /// </summary>
-    [DllImport("bass_aes67.dll")]
+    [DllImport("bass_aes67")]
     public static extern int BASS_AES67_OutputGetPPM(IntPtr handle);
 
     /// <summary>
     /// Destroy the output stream and free resources
     /// </summary>
-    [DllImport("bass_aes67.dll")]
+    [DllImport("bass_aes67")]
     public static extern bool BASS_AES67_OutputFree(IntPtr handle);
 }
 
