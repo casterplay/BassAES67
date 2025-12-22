@@ -1,10 +1,10 @@
 {
   "version": 2,
-  "dgSpecHash": "aFHrxx6bb8Q=",
+  "dgSpecHash": "gYgfVHMqv2U=",
   "success": true,
-  "projectFilePath": "/home/kennet/dev/BassAES67/BassAES67/aes67_dotnet/aes67_dotnet.csproj",
+  "projectFilePath": "C:\\Dev\\CasterPlay2025\\BassAES67\\BassAES67\\aes67_dotnet\\aes67_dotnet.csproj",
   "expectedPackageFiles": [
-    "/root/.nuget/packages/radio42.bass.net.core/2.4.17.8/radio42.bass.net.core.2.4.17.8.nupkg.sha512"
+    "C:\\Users\\Kennet\\.nuget\\packages\\radio42.bass.net.core\\2.4.17.8\\radio42.bass.net.core.2.4.17.8.nupkg.sha512"
   ],
   "logs": []
 }

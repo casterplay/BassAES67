@@ -4,7 +4,7 @@ using Un4seen.Bass.AddOn.Mix;
 
 // Parse command line args
 string clockMode = args.Length > 0 ? args[0].ToLower() : "sys"; // NOT USED!
-string interfaceIp = args.Length > 1 ? args[1] : "192.168.60.104";
+string interfaceIp = args.Length > 1 ? args[1] : "192.168.60.102";
 string inputMulticast = args.Length > 2 ? args[2] : "239.192.76.49";
 string outputMulticast = args.Length > 3 ? args[3] : "239.192.1.100";
 

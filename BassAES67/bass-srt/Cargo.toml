@@ -12,6 +12,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ringbuf = "0.4"
+# Pure Rust audio decoding - replaces mpg123 (MP2) and native FLAC decoder
+symphonia = { version = "0.5", default-features = false, features = ["mpa", "flac"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

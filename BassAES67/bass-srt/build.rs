@@ -22,10 +22,33 @@ fn main() {
 
     #[cfg(target_os = "windows")]
     {
-        // On Windows, expect SRT DLL in same directory or standard location
-        if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-            println!("cargo:rustc-link-search=native={}", manifest_dir);
-        }
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let base_path = std::path::Path::new(&manifest_dir).parent().unwrap();
+
+        // BASS library
+        let bass_path = base_path.join("bass24/c/x64");
+        println!("cargo:rustc-link-search=native={}", bass_path.display());
+
+        // Windows_need_builds folder with native libraries
+        let libs_path = base_path.join("Windows_need_builds");
+
+        // SRT (newly built)
+        let srt_path = libs_path.join("srt/srt-1.5.4/build/Release");
+        println!("cargo:rustc-link-search=native={}", srt_path.display());
+
+        // OPUS (newly built)
+        let opus_path = libs_path.join("opus-1.6/build/Release");
+        println!("cargo:rustc-link-search=native={}", opus_path.display());
+
+        // TwoLame
+        let twolame_path = libs_path.join("twolame-main");
+        println!("cargo:rustc-link-search=native={}", twolame_path.display());
+
+        // FLAC (newly built) - lib is in src/libFLAC/Release, DLL is in objs/Release
+        let flac_lib_path = libs_path.join("flac-master/build/src/libFLAC/Release");
+        println!("cargo:rustc-link-search=native={}", flac_lib_path.display());
+
+        // Link libraries
         println!("cargo:rustc-link-lib=dylib=srt");
     }
 

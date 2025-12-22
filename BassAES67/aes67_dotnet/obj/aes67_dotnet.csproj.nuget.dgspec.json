@@ -1,26 +1,34 @@
 {
   "format": 1,
   "restore": {
-    "/home/kennet/dev/BassAES67/BassAES67/aes67_dotnet/aes67_dotnet.csproj": {}
+    "C:\\Dev\\CasterPlay2025\\BassAES67\\BassAES67\\aes67_dotnet\\aes67_dotnet.csproj": {}
   },
   "projects": {
-    "/home/kennet/dev/BassAES67/BassAES67/aes67_dotnet/aes67_dotnet.csproj": {
+    "C:\\Dev\\CasterPlay2025\\BassAES67\\BassAES67\\aes67_dotnet\\aes67_dotnet.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/home/kennet/dev/BassAES67/BassAES67/aes67_dotnet/aes67_dotnet.csproj",
+        "projectUniqueName": "C:\\Dev\\CasterPlay2025\\BassAES67\\BassAES67\\aes67_dotnet\\aes67_dotnet.csproj",
         "projectName": "aes67_dotnet",
-        "projectPath": "/home/kennet/dev/BassAES67/BassAES67/aes67_dotnet/aes67_dotnet.csproj",
-        "packagesPath": "/root/.nuget/packages/",
-        "outputPath": "/home/kennet/dev/BassAES67/BassAES67/aes67_dotnet/obj/",
+        "projectPath": "C:\\Dev\\CasterPlay2025\\BassAES67\\BassAES67\\aes67_dotnet\\aes67_dotnet.csproj",
+        "packagesPath": "C:\\Users\\Kennet\\.nuget\\packages\\",
+        "outputPath": "C:\\Dev\\CasterPlay2025\\BassAES67\\BassAES67\\aes67_dotnet\\obj\\",
         "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages",
+          "C:\\Program Files\\dotnet\\sdk\\NuGetFallbackFolder"
+        ],
         "configFilePaths": [
-          "/root/.nuget/NuGet/NuGet.Config"
+          "C:\\Users\\Kennet\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
         ],
         "originalTargetFrameworks": [
           "net10.0"
         ],
         "sources": {
-          "/usr/lib/dotnet/library-packs": {},
+          "C:\\Dev\\Nugets": {},
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "C:\\Program Files\\dotnet\\library-packs": {},
           "https://api.nuget.org/v3/index.json": {}
         },
         "frameworks": {
@@ -66,7 +74,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "/usr/lib/dotnet/sdk/10.0.100/PortableRuntimeIdentifierGraph.json",
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.101/PortableRuntimeIdentifierGraph.json",
           "packagesToPrune": {
             "Microsoft.CSharp": "(,4.7.32767]",
             "Microsoft.VisualBasic": "(,10.4.32767]",

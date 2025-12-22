@@ -313,6 +313,14 @@ fn transmitter_loop(
         libc::nice(-20);
     }
 
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
+        };
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    }
+
     // Ignore SIGPIPE on Unix
     #[cfg(unix)]
     unsafe {

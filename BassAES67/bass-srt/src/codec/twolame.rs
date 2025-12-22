@@ -28,7 +28,9 @@ pub struct TwolameOptions {
     _private: [u8; 0],
 }
 
-#[link(name = "twolame")]
+// On Windows, the library is named "libtwolame_dll", on other platforms it's "twolame"
+#[cfg_attr(target_os = "windows", link(name = "libtwolame_dll"))]
+#[cfg_attr(not(target_os = "windows"), link(name = "twolame"))]
 extern "C" {
     // Initialization
     fn twolame_init() -> *mut TwolameOptions;

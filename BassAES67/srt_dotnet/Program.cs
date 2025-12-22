@@ -29,6 +29,8 @@ NativeLibrary.SetDllImportResolver(typeof(BassSrtNative).Assembly, (libraryName,
             fullPath = Path.Combine(assemblyDir, $"{libraryName}.dll");
     }
 
+    Console.WriteLine($"Trying to load native library from: {fullPath}");
+
     if (File.Exists(fullPath) && NativeLibrary.TryLoad(fullPath, out IntPtr handle))
         return handle;
 
@@ -41,23 +43,10 @@ Console.WriteLine("=========================\n");
 
 // Parse command line
 string url = args.Length > 0 ? args[0] : "srt://127.0.0.1:9000";
-string interfaceIp = args.Length > 1 ? args[1] : "192.168.60.104";
+string interfaceIp = args.Length > 1 ? args[1] : "192.168.60.102";
 string inputMulticast = args.Length > 2 ? args[2] : "239.192.76.49";
 string outputMulticast = args.Length > 3 ? args[3] : "239.192.1.100";
 
-/*
-// Get BASS version
-Console.WriteLine($"BASS version: {BassSrtNative.GetVersionString()}");
-
-// Initialize BASS
-Console.WriteLine("\nInitializing BASS...");
-if (!BassSrtNative.BASS_Init(-1, 48000, 0, IntPtr.Zero, IntPtr.Zero))
-{
-    Console.WriteLine($"ERROR: Failed to initialize BASS (error code: {BassSrtNative.BASS_ErrorGetCode()})");
-    return;
-}
-Console.WriteLine("BASS initialized successfully");
-*/
 
 // Initialize BASS
 var audioEngine = new AudioEngine();
@@ -68,7 +57,7 @@ Console.WriteLine($"mixer: {mixer}");
 
 
 // Set clock mode BEFORE creating streams
-int clockModeValue = Aes67Native.BASS_AES67_CLOCK_LIVEWIRE;   // BASS_AES67_CLOCK_PTP, BASS_AES67_CLOCK_LIVEWIRE, BASS_AES67_CLOCK_SYSTEM
+int clockModeValue = Aes67Native.BASS_AES67_CLOCK_SYSTEM;   // BASS_AES67_CLOCK_PTP, BASS_AES67_CLOCK_LIVEWIRE, BASS_AES67_CLOCK_SYSTEM
 Bass.BASS_SetConfig((BASSConfig)Aes67Native.BASS_CONFIG_AES67_CLOCK_MODE, clockModeValue);
 Console.WriteLine($"Clock mode set to: {Aes67Native.GetClockModeName(clockModeValue)}");
 
@@ -131,6 +120,22 @@ Console.WriteLine();
 // Load the SRT plugin - use absolute path from application directory
 Console.WriteLine("\nLoading SRT plugin...");
 
+bool isLinux = RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
+
+int _pluginSrt = 0;
+if(isLinux)
+{
+    _pluginSrt = Bass.BASS_PluginLoad("libbass_srt.so");
+}
+else
+{
+    _pluginSrt = Bass.BASS_PluginLoad("bass_srt.dll");
+}
+
+
+Console.WriteLine($"Plugin loaded (handle: {_pluginSrt} {Bass.BASS_ErrorGetCode()})");
+/*
+
 string? appDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
 string[] pluginPaths = appDir != null
     ? new[]
@@ -162,6 +167,7 @@ if (plugin == 0)
     return;
 }
 Console.WriteLine($"Plugin loaded successfully (handle: {plugin})");
+*/
 
 // Stream handle - will be updated on reconnection
 int stream = 0;
@@ -299,7 +305,7 @@ if (stream != 0)
     BassSrtNative.BASS_ChannelStop(stream);
     BassSrtNative.BASS_StreamFree(stream);
 }
-BassSrtNative.BASS_PluginFree(plugin);
+BassSrtNative.BASS_PluginFree(_pluginSrt);
 BassSrtNative.BASS_Free();
 Console.WriteLine("Done!");
 

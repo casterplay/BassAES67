@@ -1,123 +1,27 @@
-//! mpg123 MPEG audio decoder bindings for bass_srt.
+//! MPEG audio decoder using Symphonia (pure Rust).
 //!
-//! mpg123 decodes MP1, MP2, and MP3 audio. We use it specifically for
-//! MP2 (Layer 2) decoding which is the broadcast standard.
+//! This module decodes MP1, MP2, and MP3 audio using the Symphonia library.
+//! It replaces the native mpg123 library for cross-platform compatibility.
 
-use std::ffi::c_int;
-use std::ptr;
+use std::io::Cursor;
+
+use symphonia::core::audio::{AudioBufferRef, Signal};
+use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_MP1, CODEC_TYPE_MP2, CODEC_TYPE_MP3};
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
 
 use super::{AudioFormat, CodecError};
 
-/// Opaque decoder handle
-#[repr(C)]
-pub struct Mpg123Handle {
-    _private: [u8; 0],
-}
-
-// Error codes
-pub const MPG123_OK: c_int = 0;
-pub const MPG123_DONE: c_int = -12;
-pub const MPG123_NEW_FORMAT: c_int = -11;
-pub const MPG123_NEED_MORE: c_int = -10;
-pub const MPG123_ERR: c_int = -1;
-
-// Encoding flags
-pub const MPG123_ENC_SIGNED_16: c_int = 0x0d0;   // Signed 16-bit
-pub const MPG123_ENC_FLOAT_32: c_int = 0x200;     // 32-bit float
-
-// Channel count flags
-pub const MPG123_MONO: c_int = 1;
-pub const MPG123_STEREO: c_int = 2;
-
-#[link(name = "mpg123")]
-extern "C" {
-    // Library initialization
-    fn mpg123_init() -> c_int;
-    fn mpg123_exit();
-
-    // Handle creation/destruction
-    fn mpg123_new(decoder: *const i8, error: *mut c_int) -> *mut Mpg123Handle;
-    fn mpg123_delete(mh: *mut Mpg123Handle);
-
-    // Format configuration
-    fn mpg123_format_none(mh: *mut Mpg123Handle) -> c_int;
-    fn mpg123_format(
-        mh: *mut Mpg123Handle,
-        rate: i64,
-        channels: c_int,
-        encodings: c_int,
-    ) -> c_int;
-    fn mpg123_getformat(
-        mh: *mut Mpg123Handle,
-        rate: *mut i64,
-        channels: *mut c_int,
-        encoding: *mut c_int,
-    ) -> c_int;
-
-    // Feed mode
-    fn mpg123_open_feed(mh: *mut Mpg123Handle) -> c_int;
-
-    // Decoding
-    fn mpg123_feed(mh: *mut Mpg123Handle, data: *const u8, size: usize) -> c_int;
-    fn mpg123_decode(
-        mh: *mut Mpg123Handle,
-        inmemory: *const u8,
-        inmemsize: usize,
-        outmemory: *mut u8,
-        outmemsize: usize,
-        done: *mut usize,
-    ) -> c_int;
-    fn mpg123_read(
-        mh: *mut Mpg123Handle,
-        outmemory: *mut u8,
-        outmemsize: usize,
-        done: *mut usize,
-    ) -> c_int;
-
-    // Error handling
-    fn mpg123_plain_strerror(errcode: c_int) -> *const i8;
-    fn mpg123_strerror(mh: *mut Mpg123Handle) -> *const i8;
-}
-
-// Thread-safe initialization tracking
-use std::sync::Once;
-static INIT: Once = Once::new();
-
-/// Initialize the mpg123 library (called once automatically)
-fn ensure_init() {
-    INIT.call_once(|| {
-        unsafe {
-            let result = mpg123_init();
-            if result != MPG123_OK {
-                panic!("Failed to initialize mpg123: {}", error_string(result));
-            }
-        }
-    });
-}
-
-/// Get error message for an mpg123 error code
-pub fn error_string(error: c_int) -> String {
-    unsafe {
-        let ptr = mpg123_plain_strerror(error);
-        if ptr.is_null() {
-            format!("Unknown mpg123 error {}", error)
-        } else {
-            std::ffi::CStr::from_ptr(ptr)
-                .to_string_lossy()
-                .into_owned()
-        }
-    }
-}
-
-/// MP2/MP3 Decoder using mpg123 library
+/// MP2/MP3 Decoder using Symphonia library (pure Rust)
 pub struct Decoder {
-    handle: *mut Mpg123Handle,
     format: Option<AudioFormat>,
-    /// Buffer for feeding compressed data
+    /// Buffer for accumulating input data across calls
     input_buffer: Vec<u8>,
 }
 
-// SAFETY: Mpg123Handle is internally managed
+// SAFETY: No native pointers, pure Rust
 unsafe impl Send for Decoder {}
 
 impl Decoder {
@@ -125,63 +29,15 @@ impl Decoder {
     ///
     /// The decoder auto-detects format from the input stream.
     pub fn new() -> Result<Self, CodecError> {
-        ensure_init();
-
-        unsafe {
-            let mut error: c_int = 0;
-            let handle = mpg123_new(ptr::null(), &mut error);
-
-            if handle.is_null() || error != MPG123_OK {
-                return Err(CodecError::LibraryError(error));
-            }
-
-            // Clear all format support, then set what we want
-            if mpg123_format_none(handle) != MPG123_OK {
-                mpg123_delete(handle);
-                return Err(CodecError::Other("Failed to clear formats".to_string()));
-            }
-
-            // Support common sample rates with signed 16-bit output
-            for rate in [44100i64, 48000] {
-                // Allow mono and stereo
-                mpg123_format(handle, rate, MPG123_MONO | MPG123_STEREO, MPG123_ENC_SIGNED_16);
-            }
-
-            // Open for feeding (no file, we feed data directly)
-            let result = mpg123_open_feed(handle);
-            if result != MPG123_OK {
-                mpg123_delete(handle);
-                return Err(CodecError::LibraryError(result));
-            }
-
-            Ok(Self {
-                handle,
-                format: None,
-                input_buffer: Vec::with_capacity(8192),
-            })
-        }
+        Ok(Self {
+            format: None,
+            input_buffer: Vec::with_capacity(8192),
+        })
     }
 
     /// Get the detected audio format (available after first decode)
     pub fn format(&self) -> Option<AudioFormat> {
         self.format
-    }
-
-    /// Update format from the decoder
-    fn update_format(&mut self) -> Result<(), CodecError> {
-        unsafe {
-            let mut rate: i64 = 0;
-            let mut channels: c_int = 0;
-            let mut encoding: c_int = 0;
-
-            let result = mpg123_getformat(self.handle, &mut rate, &mut channels, &mut encoding);
-            if result != MPG123_OK {
-                return Err(CodecError::LibraryError(result));
-            }
-
-            self.format = Some(AudioFormat::new(rate as u32, channels as u8));
-        }
-        Ok(())
     }
 
     /// Decode MP2/MP3 data to PCM samples.
@@ -191,14 +47,11 @@ impl Decoder {
     /// * `output` - Output buffer for decoded PCM samples (i16)
     ///
     /// # Returns
-    /// Number of bytes written to output, or error.
+    /// Number of samples written to output, or error.
     /// May return 0 if more input data is needed.
     pub fn decode(&mut self, data: &[u8], output: &mut [i16]) -> Result<usize, CodecError> {
         let output_bytes = unsafe {
-            std::slice::from_raw_parts_mut(
-                output.as_mut_ptr() as *mut u8,
-                output.len() * 2,
-            )
+            std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut u8, output.len() * 2)
         };
 
         self.decode_bytes(data, output_bytes).map(|bytes| bytes / 2)
@@ -208,105 +61,245 @@ impl Decoder {
     ///
     /// Returns number of bytes written to output.
     pub fn decode_bytes(&mut self, data: &[u8], output: &mut [u8]) -> Result<usize, CodecError> {
-        unsafe {
-            let mut done: usize = 0;
+        // Accumulate input data
+        self.input_buffer.extend_from_slice(data);
 
-            let result = mpg123_decode(
-                self.handle,
-                data.as_ptr(),
-                data.len(),
-                output.as_mut_ptr(),
-                output.len(),
-                &mut done,
-            );
+        // Need enough data for at least a frame header (4 bytes) plus some frame data
+        if self.input_buffer.len() < 128 {
+            return Ok(0);
+        }
 
-            match result {
-                MPG123_OK | MPG123_DONE => Ok(done),
-                MPG123_NEED_MORE => Ok(done), // Return what we have, caller should feed more
-                MPG123_NEW_FORMAT => {
-                    self.update_format()?;
-                    // After format change, try to get more output
-                    if done == 0 {
-                        let mut more_done: usize = 0;
-                        let result2 = mpg123_read(
-                            self.handle,
-                            output.as_mut_ptr(),
-                            output.len(),
-                            &mut more_done,
-                        );
-                        if result2 == MPG123_OK || result2 == MPG123_NEED_MORE {
-                            Ok(more_done)
-                        } else {
-                            Ok(0)
-                        }
-                    } else {
-                        Ok(done)
+        // Create a media source from the accumulated buffer
+        let cursor = Cursor::new(self.input_buffer.clone());
+        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+
+        // Probe the format
+        let mut hint = Hint::new();
+        hint.with_extension("mp2");
+
+        let format_opts = FormatOptions {
+            enable_gapless: false,
+            ..Default::default()
+        };
+
+        let metadata_opts = MetadataOptions::default();
+
+        let probed = match symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts) {
+            Ok(p) => p,
+            Err(_) => {
+                // Not enough data yet or invalid format
+                return Ok(0);
+            }
+        };
+
+        let mut format_reader = probed.format;
+
+        // Find the audio track
+        let track = match format_reader.tracks().iter().find(|t| {
+            matches!(
+                t.codec_params.codec,
+                CODEC_TYPE_MP1 | CODEC_TYPE_MP2 | CODEC_TYPE_MP3
+            )
+        }) {
+            Some(t) => t,
+            None => return Err(CodecError::Other("No MPEG audio track found".to_string())),
+        };
+
+        let track_id = track.id;
+
+        // Update format info
+        if let (Some(sample_rate), Some(channels)) = (
+            track.codec_params.sample_rate,
+            track.codec_params.channels,
+        ) {
+            self.format = Some(AudioFormat::new(sample_rate, channels.count() as u8));
+        }
+
+        // Create decoder
+        let decoder_opts = DecoderOptions::default();
+        let mut decoder = match symphonia::default::get_codecs()
+            .make(&track.codec_params, &decoder_opts)
+        {
+            Ok(d) => d,
+            Err(e) => {
+                return Err(CodecError::Other(format!("Failed to create decoder: {}", e)));
+            }
+        };
+
+        let mut total_bytes = 0;
+
+        // Decode packets
+        loop {
+            let packet = match format_reader.next_packet() {
+                Ok(p) => p,
+                Err(symphonia::core::errors::Error::IoError(e))
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    // End of current buffer, keep accumulated data for next call
+                    break;
+                }
+                Err(_) => break,
+            };
+
+            if packet.track_id() != track_id {
+                continue;
+            }
+
+            match decoder.decode(&packet) {
+                Ok(decoded) => {
+                    let bytes_written = copy_audio_to_i16_bytes(&decoded, &mut output[total_bytes..]);
+                    total_bytes += bytes_written;
+
+                    if total_bytes + 8192 > output.len() {
+                        // Output buffer getting full
+                        break;
                     }
                 }
-                _ => Err(CodecError::LibraryError(result)),
+                Err(symphonia::core::errors::Error::DecodeError(_)) => {
+                    // Skip corrupted frames
+                    continue;
+                }
+                Err(_) => break,
             }
         }
+
+        // Clear consumed data (keep any remaining for next call)
+        // For streaming, we clear all since we process what we can
+        if total_bytes > 0 {
+            self.input_buffer.clear();
+        }
+
+        Ok(total_bytes)
     }
 
     /// Feed compressed data without immediate decoding.
     ///
     /// Use this to buffer data, then call read() to get decoded output.
     pub fn feed(&mut self, data: &[u8]) -> Result<(), CodecError> {
-        unsafe {
-            let result = mpg123_feed(self.handle, data.as_ptr(), data.len());
-            if result != MPG123_OK {
-                Err(CodecError::LibraryError(result))
-            } else {
-                Ok(())
-            }
-        }
+        self.input_buffer.extend_from_slice(data);
+        Ok(())
     }
 
     /// Read decoded output from previously fed data.
     ///
     /// Returns number of bytes written to output.
     pub fn read(&mut self, output: &mut [u8]) -> Result<usize, CodecError> {
-        unsafe {
-            let mut done: usize = 0;
-            let result = mpg123_read(self.handle, output.as_mut_ptr(), output.len(), &mut done);
-
-            match result {
-                MPG123_OK | MPG123_DONE => Ok(done),
-                MPG123_NEED_MORE => Ok(done),
-                MPG123_NEW_FORMAT => {
-                    self.update_format()?;
-                    Ok(done)
-                }
-                _ => Err(CodecError::LibraryError(result)),
-            }
+        if self.input_buffer.is_empty() {
+            return Ok(0);
         }
+
+        // Decode the buffered data
+        let data = std::mem::take(&mut self.input_buffer);
+        self.decode_bytes(&data, output)
     }
 
     /// Read decoded output as i16 samples.
     pub fn read_samples(&mut self, output: &mut [i16]) -> Result<usize, CodecError> {
-        let output_bytes = unsafe {
-            std::slice::from_raw_parts_mut(
-                output.as_mut_ptr() as *mut u8,
-                output.len() * 2,
-            )
-        };
+        let output_bytes =
+            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut u8, output.len() * 2) };
 
         self.read(output_bytes).map(|bytes| bytes / 2)
     }
 }
 
-impl Drop for Decoder {
-    fn drop(&mut self) {
-        unsafe {
-            mpg123_delete(self.handle);
+/// Copy decoded audio to i16 bytes buffer
+fn copy_audio_to_i16_bytes(decoded: &AudioBufferRef, output: &mut [u8]) -> usize {
+    match decoded {
+        AudioBufferRef::S16(buf) => {
+            let samples = buf.chan(0).len() * buf.spec().channels.count();
+            let bytes_needed = samples * 2;
+
+            if bytes_needed > output.len() {
+                return 0;
+            }
+
+            let channels = buf.spec().channels.count();
+            let frames = buf.frames();
+            let mut offset = 0;
+
+            // Interleave channels
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    let sample = buf.chan(ch)[frame];
+                    let bytes = sample.to_le_bytes();
+                    if offset + 2 <= output.len() {
+                        output[offset] = bytes[0];
+                        output[offset + 1] = bytes[1];
+                        offset += 2;
+                    }
+                }
+            }
+
+            offset
         }
+        AudioBufferRef::S32(buf) => {
+            let channels = buf.spec().channels.count();
+            let frames = buf.frames();
+            let bytes_needed = frames * channels * 2;
+
+            if bytes_needed > output.len() {
+                return 0;
+            }
+
+            let mut offset = 0;
+
+            // Convert S32 to S16 and interleave
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    let sample = buf.chan(ch)[frame];
+                    // Convert 32-bit to 16-bit by taking upper 16 bits
+                    let sample_16 = (sample >> 16) as i16;
+                    let bytes = sample_16.to_le_bytes();
+                    if offset + 2 <= output.len() {
+                        output[offset] = bytes[0];
+                        output[offset + 1] = bytes[1];
+                        offset += 2;
+                    }
+                }
+            }
+
+            offset
+        }
+        AudioBufferRef::F32(buf) => {
+            let channels = buf.spec().channels.count();
+            let frames = buf.frames();
+            let bytes_needed = frames * channels * 2;
+
+            if bytes_needed > output.len() {
+                return 0;
+            }
+
+            let mut offset = 0;
+
+            // Convert F32 to S16 and interleave
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    let sample = buf.chan(ch)[frame];
+                    let sample_16 = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+                    let bytes = sample_16.to_le_bytes();
+                    if offset + 2 <= output.len() {
+                        output[offset] = bytes[0];
+                        output[offset + 1] = bytes[1];
+                        offset += 2;
+                    }
+                }
+            }
+
+            offset
+        }
+        _ => 0,
     }
 }
 
 impl Default for Decoder {
     fn default() -> Self {
-        Self::new().expect("Failed to create mpg123 decoder")
+        Self::new().expect("Failed to create Symphonia decoder")
     }
+}
+
+/// Get error message (compatibility function, Symphonia uses Rust errors)
+pub fn error_string(error: i32) -> String {
+    format!("Symphonia decoder error code: {}", error)
 }
 
 #[cfg(test)]
@@ -321,11 +314,8 @@ mod tests {
 
     #[test]
     fn test_error_string() {
-        let msg = error_string(MPG123_ERR);
+        let msg = error_string(-1);
         assert!(!msg.is_empty());
-        println!("MPG123_ERR message: {}", msg);
+        println!("Error message: {}", msg);
     }
-
-    // Note: Full encode/decode test requires a valid MP2 stream.
-    // The twolame encoder can be used to create test data.
 }
