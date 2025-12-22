@@ -84,3 +84,4 @@
 /home/kennet/dev/BassAES67/BassAES67/dotnet_blazor_web/obj/Debug/net10.0/BlazorServerApp.pdb
 /home/kennet/dev/BassAES67/BassAES67/dotnet_blazor_web/obj/Debug/net10.0/BlazorServerApp.genruntimeconfig.cache
 /home/kennet/dev/BassAES67/BassAES67/dotnet_blazor_web/obj/Debug/net10.0/ref/BlazorServerApp.dll
+/home/kennet/dev/BassAES67/BassAES67/dotnet_blazor_web/obj/Debug/net10.0/compressed/9h9hfm2ddk-{0}-t0au9xg76p-t0au9xg76p.gz
