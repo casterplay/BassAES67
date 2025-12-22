@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "BbMkicqmePo=",
+  "success": true,
+  "projectFilePath": "/home/kennet/dev/BassAES67/BassAES67/dotnet_blazor_web/BlazorServerApp.csproj",
+  "expectedPackageFiles": [
+    "/home/kennet/.nuget/packages/microsoft.aspnetcore.app.internal.assets/10.0.0/microsoft.aspnetcore.app.internal.assets.10.0.0.nupkg.sha512"
+  ],
+  "logs": []
+}

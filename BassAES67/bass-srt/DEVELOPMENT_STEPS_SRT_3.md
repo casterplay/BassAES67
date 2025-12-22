@@ -428,3 +428,251 @@ dotnet run
 # Summary
 
 The SIGSEGV crash was caused by the old SRT 1.4.4 library from apt-get. Upgrading to SRT 1.5.4 built from source with OpenSSL fixed the issue. Additional improvements include a callback system for connection state changes and proper C# patterns for timer-based operations.
+
+---
+
+# SRT Output Module Implementation
+
+## Overview
+
+The SRT output module enables sending audio from BASS channels/mixers via SRT protocol. This complements the existing input (receiver) module.
+
+## Architecture
+
+```
+BASS Channel/Mixer
+       │
+       ▼ (BASS_ChannelGetData - float samples)
+  Transmitter Thread
+       │
+       ▼ (encode)
+   Audio Encoder (PCM/OPUS/MP2/FLAC)
+       │
+       ▼ (frame with 4-byte protocol header)
+  Protocol Framing
+       │
+       ▼ (srt_send)
+   SRT Socket
+```
+
+## Supported Features
+
+| Feature | Description |
+|---------|-------------|
+| **Codecs** | PCM L16, OPUS, MP2, FLAC |
+| **SRT Modes** | Caller (connects to remote) and Listener (accepts connections) |
+| **Connection Callback** | Separate callback system for output state changes |
+| **Lock-free Design** | Uses AtomicBool, AtomicU64 - no Mutex in audio thread |
+
+## C API Functions
+
+### Core Functions
+
+```c
+// Create SRT output stream from a BASS channel
+void* BASS_SRT_OutputCreate(DWORD bass_channel, SrtOutputConfigFFI* config);
+
+// Start transmitting
+BOOL BASS_SRT_OutputStart(void* handle);
+
+// Stop transmitting
+BOOL BASS_SRT_OutputStop(void* handle);
+
+// Get statistics
+BOOL BASS_SRT_OutputGetStats(void* handle, SrtOutputStatsFFI* stats);
+
+// Check if running
+BOOL BASS_SRT_OutputIsRunning(void* handle);
+
+// Free resources
+BOOL BASS_SRT_OutputFree(void* handle);
+```
+
+### Callback Functions
+
+```c
+// Set callback for connection state changes (0=disconnected, 1=connecting, 2=connected, 3=reconnecting)
+void BASS_SRT_SetOutputConnectionStateCallback(
+    void (*callback)(uint32_t state, void* user),
+    void* user
+);
+
+// Clear the callback
+void BASS_SRT_ClearOutputConnectionStateCallback();
+```
+
+## FFI Structures
+
+### SrtOutputConfigFFI
+
+```rust
+#[repr(C)]
+pub struct SrtOutputConfigFFI {
+    pub host_addr: [u8; 4],      // IP address bytes (e.g., [192, 168, 1, 100])
+    pub port: u16,               // Port number
+    pub mode: u8,                // 0=Caller, 1=Listener
+    pub latency_ms: u32,         // SRT latency in milliseconds
+    pub passphrase: *const c_char, // Optional passphrase (null for none)
+    pub stream_id: *const c_char,  // Optional stream ID (null for none)
+    pub channels: u16,           // 1=mono, 2=stereo
+    pub sample_rate: u32,        // e.g., 48000
+    pub codec: u8,               // 0=PCM, 1=OPUS, 2=MP2, 3=FLAC
+    pub bitrate_kbps: u32,       // For OPUS/MP2 (e.g., 192)
+    pub flac_level: u8,          // FLAC compression 0-8
+}
+```
+
+### SrtOutputStatsFFI
+
+```rust
+#[repr(C)]
+pub struct SrtOutputStatsFFI {
+    pub packets_sent: u64,
+    pub bytes_sent: u64,
+    pub send_errors: u64,
+    pub underruns: u64,
+    pub connection_state: u32,
+}
+```
+
+## C# Bindings
+
+### Constants
+
+```csharp
+// Codec constants
+public const int OUTPUT_CODEC_PCM = 0;
+public const int OUTPUT_CODEC_OPUS = 1;
+public const int OUTPUT_CODEC_MP2 = 2;
+public const int OUTPUT_CODEC_FLAC = 3;
+
+// Connection mode constants
+public const int OUTPUT_MODE_CALLER = 0;
+public const int OUTPUT_MODE_LISTENER = 1;
+```
+
+### P/Invoke Declarations
+
+```csharp
+[DllImport("bass_srt")]
+public static extern IntPtr BASS_SRT_OutputCreate(int bassChannel, ref SrtOutputConfigFFI config);
+
+[DllImport("bass_srt")]
+public static extern bool BASS_SRT_OutputStart(IntPtr handle);
+
+[DllImport("bass_srt")]
+public static extern bool BASS_SRT_OutputStop(IntPtr handle);
+
+[DllImport("bass_srt")]
+public static extern bool BASS_SRT_OutputGetStats(IntPtr handle, out SrtOutputStatsFFI stats);
+
+[DllImport("bass_srt")]
+public static extern bool BASS_SRT_OutputIsRunning(IntPtr handle);
+
+[DllImport("bass_srt")]
+public static extern bool BASS_SRT_OutputFree(IntPtr handle);
+
+// Callback
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate void OutputConnectionStateCallback(uint state, IntPtr user);
+
+[DllImport("bass_srt")]
+public static extern void BASS_SRT_SetOutputConnectionStateCallback(
+    OutputConnectionStateCallback callback, IntPtr user);
+
+[DllImport("bass_srt")]
+public static extern void BASS_SRT_ClearOutputConnectionStateCallback();
+```
+
+### C# Usage Example
+
+```csharp
+// Initialize BASS
+BassSrtNative.BASS_Init(-1, 48000, 0, IntPtr.Zero, IntPtr.Zero);
+
+// Load bass_srt plugin
+int plugin = BassSrtNative.BASS_PluginLoad("bass_srt", 0);
+
+// Create a mixer or stream as audio source
+int mixer = /* your BASS mixer/channel */;
+
+// Configure output
+var config = SrtOutputConfigFFI.CreateDefault("192.168.1.100", 5000);
+config.Codec = BassSrtNative.OUTPUT_CODEC_OPUS;
+config.BitrateKbps = 192;
+config.Mode = BassSrtNative.OUTPUT_MODE_CALLER;
+
+// Keep delegate reference to prevent GC!
+BassSrtNative.OutputConnectionStateCallback outputCallback = (state, user) =>
+{
+    Console.WriteLine($"Output state: {BassSrtNative.GetConnectionStateName((int)state)}");
+};
+BassSrtNative.BASS_SRT_SetOutputConnectionStateCallback(outputCallback, IntPtr.Zero);
+
+// Create and start output
+IntPtr outputHandle = BassSrtNative.BASS_SRT_OutputCreate(mixer, ref config);
+if (outputHandle != IntPtr.Zero)
+{
+    BassSrtNative.BASS_SRT_OutputStart(outputHandle);
+
+    // Monitor stats
+    if (BassSrtNative.BASS_SRT_OutputGetStats(outputHandle, out var stats))
+    {
+        Console.WriteLine($"Packets sent: {stats.PacketsSent}");
+    }
+
+    // Cleanup
+    BassSrtNative.BASS_SRT_OutputStop(outputHandle);
+    BassSrtNative.BASS_SRT_OutputFree(outputHandle);
+}
+
+BassSrtNative.BASS_SRT_ClearOutputConnectionStateCallback();
+BassSrtNative.BASS_Free();
+```
+
+## Codec Frame Sizes
+
+| Codec | Frame Duration | Samples at 48kHz |
+|-------|----------------|------------------|
+| PCM   | 5ms            | 240 samples      |
+| OPUS  | 5ms            | 240 samples      |
+| MP2   | 24ms           | 1152 samples     |
+| FLAC  | 24ms           | 1152 samples     |
+
+## Caller vs Listener Mode
+
+### Caller Mode (OUTPUT_MODE_CALLER)
+- Connects to a remote SRT listener
+- Use when sending to a fixed server/receiver
+- Automatically reconnects on disconnect
+
+### Listener Mode (OUTPUT_MODE_LISTENER)
+- Binds to local port and waits for connections
+- Use when receivers connect to you
+- Accepts one connection at a time (disconnects existing on new connection)
+
+## Files Created/Modified for Output Module
+
+| File | Changes |
+|------|---------|
+| `bass-srt/src/output/stream.rs` | Complete rewrite - SrtOutputStream, transmitter threads, connection callbacks |
+| `bass-srt/src/output/encoder.rs` | New file - AudioEncoder trait, PCM/OPUS/MP2/FLAC encoder wrappers |
+| `bass-srt/src/output/mod.rs` | Updated exports |
+| `bass-srt/src/lib.rs` | Added C API exports (BASS_SRT_Output*) |
+| `srt_dotnet/BassSrtNative.cs` | Added C# P/Invoke bindings for output |
+
+## Protocol Interoperability
+
+The output module uses the same 4-byte framing protocol as the input module:
+
+```
+[Format: 1 byte] [Reserved: 3 bytes] [Audio payload: N bytes]
+```
+
+Format byte values:
+- `0x01` = PCM L16
+- `0x02` = OPUS
+- `0x03` = MP2
+- `0x04` = FLAC
+
+This ensures compatibility between bass-srt senders and receivers
