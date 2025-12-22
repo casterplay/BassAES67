@@ -1,0 +1,3 @@
+cargo:rustc-link-search=native=/home/kennet/local/srt-1.5.4/lib
+cargo:rustc-link-lib=dylib=srt
+cargo:rustc-link-search=native=/home/kennet/dev/BassAES67/BassAES67/bass-aes67/target/release

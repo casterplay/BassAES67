@@ -20,6 +20,7 @@ use ffi::addon::*;
 // Re-export for external use
 pub use output::{SrtOutputStream, SrtOutputConfig, OutputStats};
 pub use input::stream::{MetadataCallback, set_metadata_callback, clear_metadata_callback};
+pub use input::stream::{ConnectionStateCallback, set_connection_state_callback, clear_connection_state_callback};
 
 // Plugin info strings (static, null-terminated)
 static PLUGIN_NAME: &[u8] = b"SRT Audio\0";
@@ -52,6 +53,7 @@ pub const BASS_CONFIG_SRT_CODEC: DWORD = 0x21005;  // Returns: 0=unknown, 1=PCM,
 pub const BASS_CONFIG_SRT_BITRATE: DWORD = 0x21006;  // Returns: bitrate in kbps (0 for PCM)
 pub const BASS_CONFIG_SRT_ENCRYPTED: DWORD = 0x21010;  // Returns: 1 if passphrase was set
 pub const BASS_CONFIG_SRT_MODE: DWORD = 0x21011;  // Returns: 0=caller, 1=listener, 2=rendezvous
+pub const BASS_CONFIG_SRT_CONNECTION_STATE: DWORD = 0x21012;  // Returns: 0=disconnected, 1=connecting, 2=connected, 3=reconnecting
 
 // SRT transport statistics (0x21020 range)
 pub const BASS_CONFIG_SRT_RTT: DWORD = 0x21020;           // RTT in ms×10 (e.g., 125 = 12.5ms)
@@ -69,6 +71,12 @@ pub const BASS_CONFIG_SRT_UPTIME: DWORD = 0x21029;        // Connection uptime (
 fn init_plugin() -> bool {
     if INITIALIZED.swap(true, Ordering::SeqCst) {
         return true;  // Already initialized
+    }
+
+    // Ignore SIGPIPE on Unix - prevents process termination when SRT connection breaks
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
 
     unsafe {
@@ -211,6 +219,19 @@ unsafe extern "system" fn config_handler(
                 if !stream_ptr.is_null() {
                     let stream = &*stream_ptr;
                     *(value as *mut DWORD) = stream.connection_mode();
+                    return TRUE;
+                }
+                *(value as *mut DWORD) = 0;
+                return TRUE;
+            }
+            FALSE
+        }
+        BASS_CONFIG_SRT_CONNECTION_STATE => {
+            if !is_set && !value.is_null() {
+                let stream_ptr = input::stream::get_active_stream();
+                if !stream_ptr.is_null() {
+                    let stream = &*stream_ptr;
+                    *(value as *mut DWORD) = stream.connection_state();
                     return TRUE;
                 }
                 *(value as *mut DWORD) = 0;
@@ -484,6 +505,24 @@ pub unsafe extern "C" fn BASS_SRT_SetMetadataCallback(
 #[no_mangle]
 pub unsafe extern "C" fn BASS_SRT_ClearMetadataCallback() {
     input::stream::clear_metadata_callback();
+}
+
+/// Set a callback for connection state changes.
+/// The callback receives the new state (CONNECTION_STATE_*) and user data.
+/// States: 0=disconnected, 1=connecting, 2=connected, 3=reconnecting
+/// The callback must be thread-safe as it's called from the receiver thread.
+#[no_mangle]
+pub unsafe extern "C" fn BASS_SRT_SetConnectionStateCallback(
+    callback: input::stream::ConnectionStateCallback,
+    user: *mut c_void,
+) {
+    input::stream::set_connection_state_callback(callback, user);
+}
+
+/// Clear the connection state callback.
+#[no_mangle]
+pub unsafe extern "C" fn BASS_SRT_ClearConnectionStateCallback() {
+    input::stream::clear_connection_state_callback();
 }
 
 // Windows DLL entry point

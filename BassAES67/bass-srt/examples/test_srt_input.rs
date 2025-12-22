@@ -24,6 +24,15 @@ use std::thread;
 use std::time::Duration;
 use std::io::Write;
 
+// Signal handler to print backtrace on SIGSEGV
+extern "C" fn sigsegv_handler(_sig: i32) {
+    eprintln!("\n\n=== SIGSEGV CAUGHT ===");
+    eprintln!("Backtrace:");
+    let bt = std::backtrace::Backtrace::force_capture();
+    eprintln!("{}", bt);
+    std::process::exit(139);
+}
+
 // BASS types
 type DWORD = u32;
 type BOOL = i32;
@@ -80,6 +89,11 @@ const CODEC_MP2: DWORD = 3;
 const CODEC_FLAC: DWORD = 4;
 
 fn main() {
+    // Install SIGSEGV handler
+    unsafe {
+        libc::signal(libc::SIGSEGV, sigsegv_handler as libc::sighandler_t);
+    }
+
     // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
 

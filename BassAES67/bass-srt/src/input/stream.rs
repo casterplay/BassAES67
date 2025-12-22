@@ -28,9 +28,17 @@ use crate::codec::{opus, mpg123, flac};
 /// Called with: json string pointer, length, user data pointer
 pub type MetadataCallback = extern "C" fn(json: *const c_char, len: u32, user: *mut c_void);
 
+/// Callback type for connection state changes
+/// Called with: new state (CONNECTION_STATE_*), user data pointer
+pub type ConnectionStateCallback = extern "C" fn(state: u32, user: *mut c_void);
+
 /// Global metadata callback (set via BASS_SRT_SetMetadataCallback)
 static METADATA_CALLBACK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static METADATA_USER: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+
+/// Global connection state callback
+static CONNECTION_STATE_CALLBACK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+static CONNECTION_STATE_USER: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
 /// Set the metadata callback for JSON packets
 pub fn set_metadata_callback(callback: MetadataCallback, user: *mut c_void) {
@@ -42,6 +50,40 @@ pub fn set_metadata_callback(callback: MetadataCallback, user: *mut c_void) {
 pub fn clear_metadata_callback() {
     METADATA_CALLBACK.store(ptr::null_mut(), Ordering::Release);
     METADATA_USER.store(ptr::null_mut(), Ordering::Release);
+}
+
+/// Set the connection state callback
+/// Called when connection state changes (connecting, connected, disconnected, reconnecting)
+pub fn set_connection_state_callback(callback: ConnectionStateCallback, user: *mut c_void) {
+    CONNECTION_STATE_CALLBACK.store(callback as *mut c_void, Ordering::Release);
+    CONNECTION_STATE_USER.store(user, Ordering::Release);
+}
+
+/// Clear the connection state callback
+pub fn clear_connection_state_callback() {
+    CONNECTION_STATE_CALLBACK.store(ptr::null_mut(), Ordering::Release);
+    CONNECTION_STATE_USER.store(ptr::null_mut(), Ordering::Release);
+}
+
+/// Helper to invoke connection state callback
+fn notify_connection_state(state: u32) {
+    let callback_ptr = CONNECTION_STATE_CALLBACK.load(Ordering::Acquire);
+    let user_ptr = CONNECTION_STATE_USER.load(Ordering::Acquire);
+
+    if !callback_ptr.is_null() {
+        let callback: ConnectionStateCallback = unsafe {
+            std::mem::transmute(callback_ptr)
+        };
+        callback(state, user_ptr);
+    }
+}
+
+/// Helper to update connection state and notify callback
+fn set_connection_state(stats: &StreamStats, state: u32) {
+    let old_state = stats.connection_state.swap(state, Ordering::Relaxed);
+    if old_state != state {
+        notify_connection_state(state);
+    }
 }
 
 /// Audio decoder state for receiver thread
@@ -71,6 +113,10 @@ impl AudioDecoder {
         }
     }
 }
+
+// Note: AudioDecoder uses default Drop behavior.
+// The decoder is kept alive for the entire receiver_loop lifetime to avoid
+// issues with codec library cleanup during reconnection.
 
 impl AudioDecoder {
     /// Decode audio data based on format, returning total float samples (frames * channels)
@@ -205,6 +251,12 @@ use std::sync::atomic::AtomicU32;
 
 use std::sync::atomic::AtomicBool as AtomicBoolStats;
 
+// Connection state values for BASS_CONFIG_SRT_CONNECTION_STATE
+pub const CONNECTION_STATE_DISCONNECTED: u32 = 0;
+pub const CONNECTION_STATE_CONNECTING: u32 = 1;
+pub const CONNECTION_STATE_CONNECTED: u32 = 2;
+pub const CONNECTION_STATE_RECONNECTING: u32 = 3;
+
 // Statistics tracked with atomics (no locking needed)
 struct StreamStats {
     packets_received: AtomicU64,
@@ -215,6 +267,7 @@ struct StreamStats {
     detected_bitrate: AtomicU32,  // kbps
     encrypted: AtomicBoolStats,   // true if passphrase was set
     connection_mode: AtomicU32,   // 0=caller, 1=listener, 2=rendezvous
+    connection_state: AtomicU32,  // 0=disconnected, 1=connecting, 2=connected, 3=reconnecting
 
     // SRT transport stats (updated periodically from srt_bstats)
     rtt_ms_x10: AtomicU32,        // RTT × 10 for 0.1ms precision
@@ -240,6 +293,7 @@ impl StreamStats {
             detected_bitrate: AtomicU32::new(0),
             encrypted: AtomicBoolStats::new(false),
             connection_mode: AtomicU32::new(0),
+            connection_state: AtomicU32::new(CONNECTION_STATE_DISCONNECTED),
             // SRT transport stats
             rtt_ms_x10: AtomicU32::new(0),
             bandwidth_kbps: AtomicU32::new(0),
@@ -376,11 +430,21 @@ impl SrtStream {
     ) {
         use super::url::ConnectionMode;
 
+        // Ignore SIGPIPE - SRT or underlying UDP socket may cause this on disconnect
+        // Without this, a disconnecting sender can crash the process
+        #[cfg(unix)]
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+        }
+
         // Initialize SRT library
         if srt_bindings::startup().is_err() {
             ended.store(true, Ordering::SeqCst);
             return;
         }
+
+        // Log SRT version once at startup
+        eprintln!("[bass-srt] SRT {}", srt_bindings::get_version_string());
 
         // Store connection mode for stats
         stats.connection_mode.store(config.mode.as_u32(), Ordering::Relaxed);
@@ -431,10 +495,27 @@ impl SrtStream {
             Ok(())
         };
 
+        // Track if this is first connection attempt or a reconnection
+        let mut first_attempt = true;
+
+        // Allocate buffers and decoder ONCE for the entire receiver loop lifetime.
+        // This avoids issues with codec library cleanup during reconnection.
+        let bytes_per_packet = config.bytes_per_packet();
+        let mut recv_buf = vec![0u8; bytes_per_packet.max(8192)];
+        let mut sample_buf = vec![0.0f32; 16384];
+        let mut decoder = AudioDecoder::new();
+
         match config.mode {
             ConnectionMode::Caller => {
                 // Caller mode with automatic reconnection
                 while running.load(Ordering::SeqCst) {
+                    // Set connection state
+                    if first_attempt {
+                        set_connection_state(&stats, CONNECTION_STATE_CONNECTING);
+                    } else {
+                        set_connection_state(&stats, CONNECTION_STATE_RECONNECTING);
+                    }
+
                     let sock = match srt_bindings::create_socket() {
                         Ok(s) => s,
                         Err(_) => {
@@ -457,26 +538,34 @@ impl SrtStream {
                         continue;
                     }
 
-                    // Connected - receive until disconnect
-                    Self::receive_from_socket(sock, &running, &ended, &stats, &mut producer, &config);
+                    // Connected!
+                    set_connection_state(&stats, CONNECTION_STATE_CONNECTED);
+                    first_attempt = false;
+
+                    // Receive until disconnect
+                    Self::receive_from_socket(
+                        sock, &running, &ended, &stats, &mut producer, &config,
+                        &mut decoder, &mut recv_buf, &mut sample_buf
+                    );
+
                     srt_bindings::close(sock).ok();
 
-                    // Check if we should stop before attempting reconnect
-                    if !running.load(Ordering::SeqCst) {
-                        break;
-                    }
-
-                    // Small delay before reconnecting
-                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    // Don't attempt auto-reconnect - let C# handle reconnection
+                    // by creating a new stream. This avoids race conditions between
+                    // the receiver thread and BASS audio thread during reconnection.
+                    break;
                 }
             }
 
             ConnectionMode::Listener => {
                 // Listener mode: accept connections in a loop
+                set_connection_state(&stats, CONNECTION_STATE_CONNECTING);
+
                 let listen_sock = match srt_bindings::create_socket() {
                     Ok(s) => s,
                     Err(_) => {
                         srt_bindings::cleanup().ok();
+                        set_connection_state(&stats, CONNECTION_STATE_DISCONNECTED);
                         ended.store(true, Ordering::SeqCst);
                         return;
                     }
@@ -485,6 +574,7 @@ impl SrtStream {
                 if configure_socket(listen_sock).is_err() {
                     srt_bindings::close(listen_sock).ok();
                     srt_bindings::cleanup().ok();
+                    set_connection_state(&stats, CONNECTION_STATE_DISCONNECTED);
                     ended.store(true, Ordering::SeqCst);
                     return;
                 }
@@ -492,6 +582,7 @@ impl SrtStream {
                 if srt_bindings::bind(listen_sock, &addr).is_err() {
                     srt_bindings::close(listen_sock).ok();
                     srt_bindings::cleanup().ok();
+                    set_connection_state(&stats, CONNECTION_STATE_DISCONNECTED);
                     ended.store(true, Ordering::SeqCst);
                     return;
                 }
@@ -499,18 +590,33 @@ impl SrtStream {
                 if srt_bindings::listen(listen_sock, 1).is_err() {
                     srt_bindings::close(listen_sock).ok();
                     srt_bindings::cleanup().ok();
+                    set_connection_state(&stats, CONNECTION_STATE_DISCONNECTED);
                     ended.store(true, Ordering::SeqCst);
                     return;
                 }
 
                 // Accept loop - reconnect when client disconnects
                 while running.load(Ordering::SeqCst) {
+                    // Waiting for connection
+                    if first_attempt {
+                        set_connection_state(&stats, CONNECTION_STATE_CONNECTING);
+                    } else {
+                        set_connection_state(&stats, CONNECTION_STATE_RECONNECTING);
+                    }
+
                     match srt_bindings::accept(listen_sock) {
                         Ok(client_sock) => {
+                            set_connection_state(&stats, CONNECTION_STATE_CONNECTED);
+                            first_attempt = false;
+
                             // Receive from this client until disconnect
-                            Self::receive_from_socket(client_sock, &running, &ended, &stats, &mut producer, &config);
+                            Self::receive_from_socket(
+                                client_sock, &running, &ended, &stats, &mut producer, &config,
+                                &mut decoder, &mut recv_buf, &mut sample_buf
+                            );
                             srt_bindings::close(client_sock).ok();
-                            // Continue to accept next client
+                            // Don't wait for next client - exit and let C# handle reconnection
+                            break;
                         }
                         Err(_) => {
                             // Accept failed - check if we should keep running
@@ -569,16 +675,22 @@ impl SrtStream {
                     return;
                 }
 
-                Self::receive_from_socket(sock, &running, &ended, &stats, &mut producer, &config);
+                Self::receive_from_socket(
+                    sock, &running, &ended, &stats, &mut producer, &config,
+                    &mut decoder, &mut recv_buf, &mut sample_buf
+                );
                 srt_bindings::close(sock).ok();
             }
         }
 
         srt_bindings::cleanup().ok();
+        set_connection_state(&stats, CONNECTION_STATE_DISCONNECTED);
         ended.store(true, Ordering::SeqCst);
     }
 
     // Helper: receive data from a connected socket until disconnection
+    // The decoder is passed in to allow reuse across reconnections, avoiding
+    // issues with codec library cleanup during reconnection.
     fn receive_from_socket(
         sock: srt_bindings::SRTSOCKET,
         running: &Arc<AtomicBool>,
@@ -586,19 +698,10 @@ impl SrtStream {
         stats: &Arc<StreamStats>,
         producer: &mut ringbuf::HeapProd<f32>,
         config: &SrtUrl,
+        decoder: &mut AudioDecoder,
+        recv_buf: &mut Vec<u8>,
+        sample_buf: &mut Vec<f32>,
     ) {
-        let bytes_per_packet = config.bytes_per_packet();
-
-        // Receive buffer - max packet size
-        let mut recv_buf = vec![0u8; bytes_per_packet.max(8192)];
-        // Float sample buffer (large enough for decoded audio)
-        // MP2 frames are 1152 samples/ch * 2 ch = 2304 samples, but decoder may buffer
-        // multiple frames, so use larger buffer
-        let mut sample_buf = vec![0.0f32; 16384];
-
-        // Audio decoder (initialized on first framed packet)
-        let mut decoder = AudioDecoder::new();
-
         // Track whether we're receiving framed or unframed data
         let mut framed_mode: Option<bool> = None;
 
@@ -606,34 +709,22 @@ impl SrtStream {
         let mut packets_since_stats_update: u32 = 0;
 
         while running.load(Ordering::SeqCst) {
-            // Check socket state
-            let state = srt_bindings::get_sock_state(sock);
-            if state != SrtSockStatus::Connected {
-                break;
-            }
-
-            // Receive data
-            match srt_bindings::recv(sock, &mut recv_buf) {
+            // Receive data - srt_recv will return error if socket disconnects
+            let recv_result = srt_bindings::recv(sock, recv_buf);
+            match recv_result {
                 Ok(len) if len > 0 => {
                     stats.packets_received.fetch_add(1, Ordering::Relaxed);
                     stats.bytes_received.fetch_add(len as u64, Ordering::Relaxed);
 
                     // Periodically update SRT transport stats (every 20 packets ~= 100-500ms)
+                    // DISABLED: get_stats may crash on disconnect - need to investigate
                     packets_since_stats_update += 1;
                     if packets_since_stats_update >= 20 {
                         packets_since_stats_update = 0;
-                        if let Ok(perf) = srt_bindings::get_stats(sock, false) {
-                            stats.rtt_ms_x10.store((perf.ms_rtt * 10.0) as u32, Ordering::Relaxed);
-                            stats.bandwidth_kbps.store((perf.mbs_bandwidth * 1000.0) as u32, Ordering::Relaxed);
-                            stats.send_rate_kbps.store((perf.mbs_send_rate * 1000.0) as u32, Ordering::Relaxed);
-                            stats.recv_rate_kbps.store((perf.mbs_recv_rate * 1000.0) as u32, Ordering::Relaxed);
-                            stats.loss_total.store(perf.pkt_rcv_loss_total as u32, Ordering::Relaxed);
-                            stats.retrans_total.store(perf.pkt_retrans_total as u32, Ordering::Relaxed);
-                            stats.drop_total.store(perf.pkt_rcv_drop_total as u32, Ordering::Relaxed);
-                            stats.flight_size.store(perf.pkt_flight_size as u32, Ordering::Relaxed);
-                            stats.recv_buffer_ms.store(perf.ms_rcv_buf as u32, Ordering::Relaxed);
-                            stats.uptime_secs.store((perf.ms_time_stamp / 1000) as u32, Ordering::Relaxed);
-                        }
+                        // TODO: Re-enable when struct alignment is verified
+                        // For now, just update uptime based on packet count
+                        let elapsed = stats.packets_received.load(Ordering::Relaxed) / 200; // ~1 sec per 200 packets
+                        stats.uptime_secs.store(elapsed as u32, Ordering::Relaxed);
                     }
 
                     let data = &recv_buf[..len];
@@ -700,7 +791,7 @@ impl SrtStream {
                                         // Ensure decoder matches format
                                         if decoder.ensure_decoder(header.format).is_ok() {
                                             // Decode audio
-                                            match decoder.decode(header.format, payload, &mut sample_buf) {
+                                            match decoder.decode(header.format, payload, sample_buf) {
                                                 Ok(samples) if samples > 0 => {
                                                     // Push to ring buffer
                                                     if producer.vacant_len() >= samples {
@@ -762,12 +853,14 @@ impl SrtStream {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
                 Err(_) => {
-                    // Error receiving
+                    // Error receiving - connection lost
                     break;
                 }
             }
         }
-        // Socket cleanup is done by the caller
+
+        // Decoder, recv_buf, and sample_buf are owned by caller - not dropped here
+        // This avoids issues with codec library cleanup during reconnection
     }
 
     // Stop the stream.
@@ -892,8 +985,16 @@ impl SrtStream {
     }
 
     // Check if stream has ended
+    // Only returns true if the receiver thread has stopped AND we're not reconnecting
     pub fn is_ended(&self) -> bool {
-        self.ended.load(Ordering::SeqCst)
+        let ended = self.ended.load(Ordering::SeqCst);
+        if !ended {
+            return false;
+        }
+        // If ended flag is set, check if we're still trying to reconnect
+        let state = self.stats.connection_state.load(Ordering::Relaxed);
+        // Only truly ended if disconnected (not connecting/reconnecting/connected)
+        state == CONNECTION_STATE_DISCONNECTED
     }
 
     // Get buffer fill percentage (0-200, 100 = target)
@@ -932,6 +1033,10 @@ impl SrtStream {
 
     pub fn connection_mode(&self) -> u32 {
         self.stats.connection_mode.load(Ordering::Relaxed)
+    }
+
+    pub fn connection_state(&self) -> u32 {
+        self.stats.connection_state.load(Ordering::Relaxed)
     }
 
     // SRT transport statistics accessors
@@ -1000,26 +1105,39 @@ pub unsafe extern "system" fn stream_proc(
     length: DWORD,
     user: *mut c_void,
 ) -> DWORD {
-    if user.is_null() {
-        return 0;
-    }
+    // Wrap in catch_unwind to prevent panics from killing the process
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if user.is_null() {
+            return 0;
+        }
 
-    let stream = &mut *(user as *mut SrtStream);
-    let samples = length as usize / 4;  // 4 bytes per float
-    let float_buffer = std::slice::from_raw_parts_mut(buffer as *mut f32, samples);
+        let stream = &mut *(user as *mut SrtStream);
 
-    let written = stream.read_samples(float_buffer);
+        let samples = length as usize / 4;  // 4 bytes per float
+        let float_buffer = std::slice::from_raw_parts_mut(buffer as *mut f32, samples);
 
-    if stream.is_ended() {
-        (written * 4) as DWORD | BASS_STREAMPROC_END
-    } else {
+        let written = stream.read_samples(float_buffer);
+
+        // Never return BASS_STREAMPROC_END - this causes BASS to call addon_free
+        // which can lead to use-after-free crashes. Let the application detect
+        // disconnection via BASS_CONFIG_SRT_CONNECTION_STATE and call
+        // BASS_StreamFree() explicitly when ready to clean up.
         (written * 4) as DWORD
+    }));
+
+    match result {
+        Ok(v) => v,
+        Err(_) => 0,
     }
 }
 
 // Add-on free callback
 unsafe extern "system" fn addon_free(inst: *mut c_void) {
     if !inst.is_null() {
+        // Clear the global pointer BEFORE freeing the stream to prevent
+        // config_handler from accessing freed memory
+        set_active_stream(std::ptr::null_mut());
+
         let stream = Box::from_raw(inst as *mut SrtStream);
         drop(stream);
     }

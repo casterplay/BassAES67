@@ -176,11 +176,17 @@ pub struct SrtTraceStats {
     pub pkt_rcv_filter_loss: i32,        // Filter loss
     pub pkt_reorder_tolerance: i32,      // Reorder tolerance
 
-    // Stats added in 1.5.0
+    // Stats added in 1.5.0 - Total
     pub pkt_sent_unique_total: i64,      // Total unique data packets sent
     pub pkt_recv_unique_total: i64,      // Total unique packets to receive
     pub byte_sent_unique_total: u64,     // Total unique bytes sent
     pub byte_recv_unique_total: u64,     // Total unique bytes to receive
+
+    // Stats added in 1.5.0 - Local
+    pub pkt_sent_unique: i64,            // Unique data packets sent
+    pub pkt_recv_unique: i64,            // Unique packets to receive
+    pub byte_sent_unique: u64,           // Unique bytes sent
+    pub byte_recv_unique: u64,           // Unique bytes to receive
 }
 
 // Sockaddr structures for network addressing
@@ -216,13 +222,14 @@ pub struct Sockaddr {
     pub sa_data: [u8; 14],
 }
 
-// Link to libsrt
+// Link to libsrt (SRT 1.5.4 with OpenSSL)
 #[cfg(target_os = "linux")]
-#[link(name = "srt-gnutls")]
+#[link(name = "srt")]
 extern "C" {
     // Library initialization
     pub fn srt_startup() -> c_int;
     pub fn srt_cleanup() -> c_int;
+    pub fn srt_getversion() -> u32;
 
     // Socket creation and lifecycle
     pub fn srt_create_socket() -> SRTSOCKET;
@@ -268,6 +275,7 @@ extern "C" {
 extern "C" {
     pub fn srt_startup() -> c_int;
     pub fn srt_cleanup() -> c_int;
+    pub fn srt_getversion() -> u32;
     pub fn srt_create_socket() -> SRTSOCKET;
     pub fn srt_close(sock: SRTSOCKET) -> c_int;
     pub fn srt_bind(sock: SRTSOCKET, name: *const Sockaddr, namelen: c_int) -> c_int;
@@ -313,6 +321,22 @@ pub fn cleanup() -> Result<(), i32> {
     } else {
         Err(result)
     }
+}
+
+// Get SRT library version as (major, minor, patch)
+pub fn get_version() -> (u8, u8, u8) {
+    let v = unsafe { srt_getversion() };
+    // Version format: 0x00MMNNPP (major, minor, patch)
+    let major = ((v >> 16) & 0xFF) as u8;
+    let minor = ((v >> 8) & 0xFF) as u8;
+    let patch = (v & 0xFF) as u8;
+    (major, minor, patch)
+}
+
+// Get SRT version as formatted string
+pub fn get_version_string() -> String {
+    let (major, minor, patch) = get_version();
+    format!("{}.{}.{}", major, minor, patch)
 }
 
 // Create a new SRT socket

@@ -1,12 +1,15 @@
 // Build script for bass-srt
-// Links against libsrt-gnutls on Linux and libbass
+// Links against libsrt on Linux and libbass
 
 fn main() {
-    // On Linux, link against libsrt-gnutls (Debian/Ubuntu variant)
+    // On Linux, link against libsrt (SRT 1.5.4 from local install)
     #[cfg(target_os = "linux")]
     {
-        println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");
-        println!("cargo:rustc-link-lib=dylib=srt-gnutls");
+        // Use local SRT 1.5.4 installation
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/kennet".to_string());
+        let srt_path = format!("{}/local/srt-1.5.4/lib", home);
+        println!("cargo:rustc-link-search=native={}", srt_path);
+        println!("cargo:rustc-link-lib=dylib=srt");
 
         // Link against BASS library (from bass-aes67 build)
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();

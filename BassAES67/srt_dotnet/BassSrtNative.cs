@@ -36,6 +36,19 @@ public static class BassSrtNative
     public const int BASS_CONFIG_SRT_UPTIME = 0x21029;            // Connection uptime (seconds)
 
     // =========================================================================
+    // Config Options - Connection State
+    // =========================================================================
+    public const int BASS_CONFIG_SRT_CONNECTION_STATE = 0x21012;  // Connection state
+
+    // =========================================================================
+    // Connection State Values (for BASS_CONFIG_SRT_CONNECTION_STATE)
+    // =========================================================================
+    public const int CONNECTION_STATE_DISCONNECTED = 0;
+    public const int CONNECTION_STATE_CONNECTING = 1;
+    public const int CONNECTION_STATE_CONNECTED = 2;
+    public const int CONNECTION_STATE_RECONNECTING = 3;
+
+    // =========================================================================
     // Codec Values (for BASS_CONFIG_SRT_CODEC)
     // =========================================================================
     public const int CODEC_UNKNOWN = 0;
@@ -164,6 +177,32 @@ public static class BassSrtNative
     public static extern uint BASS_ChannelGetLevel(int handle);
 
     // =========================================================================
+    // BASS SRT Plugin P/Invoke - Connection State Callback
+    // =========================================================================
+
+    /// <summary>
+    /// Delegate for connection state change callbacks.
+    /// Called from the receiver thread when connection state changes.
+    /// </summary>
+    /// <param name="state">New connection state (CONNECTION_STATE_*)</param>
+    /// <param name="user">User data pointer passed to SetConnectionStateCallback</param>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void ConnectionStateCallback(uint state, IntPtr user);
+
+    /// <summary>
+    /// Set callback for connection state changes.
+    /// States: 0=disconnected, 1=connecting, 2=connected, 3=reconnecting
+    /// </summary>
+    [DllImport("bass_srt")]
+    public static extern void BASS_SRT_SetConnectionStateCallback(ConnectionStateCallback callback, IntPtr user);
+
+    /// <summary>
+    /// Clear the connection state callback
+    /// </summary>
+    [DllImport("bass_srt")]
+    public static extern void BASS_SRT_ClearConnectionStateCallback();
+
+    // =========================================================================
     // Helper Methods
     // =========================================================================
 
@@ -188,6 +227,18 @@ public static class BassSrtNative
         BASS_ACTIVE_PLAYING => "Playing",
         BASS_ACTIVE_STALLED => "Stalled",
         BASS_ACTIVE_PAUSED => "Paused",
+        _ => "Unknown"
+    };
+
+    /// <summary>
+    /// Get connection state name
+    /// </summary>
+    public static string GetConnectionStateName(int state) => state switch
+    {
+        CONNECTION_STATE_DISCONNECTED => "Disconnected",
+        CONNECTION_STATE_CONNECTING => "Connecting",
+        CONNECTION_STATE_CONNECTED => "Connected",
+        CONNECTION_STATE_RECONNECTING => "Reconnecting",
         _ => "Unknown"
     };
 

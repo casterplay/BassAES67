@@ -6,6 +6,7 @@ version = 4
 name = "bass-srt"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "ringbuf",
  "windows-sys",
 ]
@@ -15,6 +16,12 @@ name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+
+[[package]]
+name = "libc"
+version = "0.2.178"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37c93d8daa9d8a012fd8ab92f088405fb202ea0b6ab73ee2482ae66af4f42091"
 
 [[package]]
 name = "portable-atomic"
