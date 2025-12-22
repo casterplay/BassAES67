@@ -6,47 +6,14 @@ using Un4seen.Bass;
 using Un4seen.Bass.AddOn.Mix;
 using System.Runtime.InteropServices;
 
-// Set native library search path to include the application directory
-NativeLibrary.SetDllImportResolver(typeof(BassSrtNative).Assembly, (libraryName, assembly, searchPath) =>
-{
-    // Get the directory where the executable is located
-    string? assemblyDir = Path.GetDirectoryName(assembly.Location);
-    if (assemblyDir == null)
-        return IntPtr.Zero;
-
-    // Try to load from the application directory first
-    string fullPath = Path.Combine(assemblyDir, libraryName);
-
-    // Add platform-specific extension if not present
-    if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-    {
-        if (!libraryName.EndsWith(".so"))
-            fullPath = Path.Combine(assemblyDir, $"lib{libraryName}.so");
-    }
-    else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-    {
-        if (!libraryName.EndsWith(".dll"))
-            fullPath = Path.Combine(assemblyDir, $"{libraryName}.dll");
-    }
-
-    Console.WriteLine($"Trying to load native library from: {fullPath}");
-
-    if (File.Exists(fullPath) && NativeLibrary.TryLoad(fullPath, out IntPtr handle))
-        return handle;
-
-    // Fall back to default resolution
-    return IntPtr.Zero;
-});
-
 Console.WriteLine("BASS SRT Plugin Test (C#)");
 Console.WriteLine("=========================\n");
 
 // Parse command line
-string url = args.Length > 0 ? args[0] : "srt://127.0.0.1:9000";
+string url = args.Length > 0 ? args[0] : "srt://192.168.60.104:9000";
 string interfaceIp = args.Length > 1 ? args[1] : "192.168.60.102";
 string inputMulticast = args.Length > 2 ? args[2] : "239.192.76.49";
 string outputMulticast = args.Length > 3 ? args[3] : "239.192.1.100";
-
 
 // Initialize BASS
 var audioEngine = new AudioEngine();
@@ -57,7 +24,7 @@ Console.WriteLine($"mixer: {mixer}");
 
 
 // Set clock mode BEFORE creating streams
-int clockModeValue = Aes67Native.BASS_AES67_CLOCK_SYSTEM;   // BASS_AES67_CLOCK_PTP, BASS_AES67_CLOCK_LIVEWIRE, BASS_AES67_CLOCK_SYSTEM
+int clockModeValue = Aes67Native.BASS_AES67_CLOCK_PTP;   // BASS_AES67_CLOCK_PTP, BASS_AES67_CLOCK_LIVEWIRE, BASS_AES67_CLOCK_SYSTEM
 Bass.BASS_SetConfig((BASSConfig)Aes67Native.BASS_CONFIG_AES67_CLOCK_MODE, clockModeValue);
 Console.WriteLine($"Clock mode set to: {Aes67Native.GetClockModeName(clockModeValue)}");
 
@@ -70,26 +37,6 @@ Console.WriteLine($"AES67 configured (interface={interfaceIp}, jitter=10ms, doma
 
 // Start clock WITHOUT needing an AES67 input stream!
 Aes67Native.BASS_AES67_ClockStart();
-
-// Create output stream
-    Console.WriteLine("Creating AES67 output stream...");
-    var outputConfig = new Aes67OutputConfig
-    {
-        MulticastAddr = IPAddress.Parse(outputMulticast),
-        Port = 5004,
-        Interface = IPAddress.Parse(interfaceIp),
-        Channels = 2,
-        SampleRate = 48000,
-        PacketTimeUs = 5000  // 5ms for Livewire compatibility
-    };
-
-    using var outputStream = new Aes67OutputStream(outputConfig);
-    //outputStream.Start(inputStream);
-    outputStream.Start(mixer);
-
-Console.WriteLine($"Output stream created (dest: {outputMulticast}:5004, {outputConfig.PacketTimeUs/1000}ms/{outputConfig.PacketsPerSecond}pkt/s)\n");
-
-
 
 
 // Wait for clock lock
@@ -117,6 +64,29 @@ for (int i = 0; i < lockWaitSeconds * 10; i++)
 Console.WriteLine();
 
 
+// Create output stream
+    Console.WriteLine("Creating AES67 output stream...");
+    var outputConfig = new Aes67OutputConfig
+    {
+        MulticastAddr = IPAddress.Parse(outputMulticast),
+        Port = 5004,
+        Interface = IPAddress.Parse(interfaceIp),
+        Channels = 2,
+        SampleRate = 48000,
+        PacketTimeUs = 5000  // 5ms for Livewire compatibility
+    };
+
+    using var outputStream = new Aes67OutputStream(outputConfig);
+    //outputStream.Start(inputStream);
+    outputStream.Start(mixer);
+
+Console.WriteLine($"Output stream created (dest: {outputMulticast}:5004, {outputConfig.PacketTimeUs/1000}ms/{outputConfig.PacketsPerSecond}pkt/s)\n");
+
+
+
+
+
+
 // Load the SRT plugin - use absolute path from application directory
 Console.WriteLine("\nLoading SRT plugin...");
 
@@ -133,41 +103,8 @@ else
 }
 
 
-Console.WriteLine($"Plugin loaded (handle: {_pluginSrt} {Bass.BASS_ErrorGetCode()})");
-/*
+Console.WriteLine($"Plugin loaded (handle: {_pluginSrt} {Bass.BASS_ErrorGetCode()}) isLinux: {isLinux}");
 
-string? appDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-string[] pluginPaths = appDir != null
-    ? new[]
-    {
-        Path.Combine(appDir, "libbass_srt.so"),
-        "libbass_srt.so",
-    }
-    : new[]
-    {
-        "libbass_srt.so",
-    };
-
-int plugin = 0;
-foreach (var path in pluginPaths)
-{
-    plugin = BassSrtNative.BASS_PluginLoad(path, 0);
-    if (plugin != 0)
-    {
-        Console.WriteLine($"Plugin loaded from: {path}");
-        break;
-    }
-}
-
-if (plugin == 0)
-{
-    Console.WriteLine($"ERROR: Failed to load plugin (error code: {BassSrtNative.BASS_ErrorGetCode()})");
-    Console.WriteLine("Tried paths: " + string.Join(", ", pluginPaths));
-    BassSrtNative.BASS_Free();
-    return;
-}
-Console.WriteLine($"Plugin loaded successfully (handle: {plugin})");
-*/
 
 // Stream handle - will be updated on reconnection
 int stream = 0;
@@ -178,17 +115,9 @@ System.Timers.Timer? reconnectTimer = null;
 // Function to create stream and start playback
 bool CreateStreamAndPlay()
 {
-    
     //stream = BassSrtNative.BASS_StreamCreateURL(url, 0, 0, IntPtr.Zero, IntPtr.Zero);
     stream = BassSrtNative.BASS_StreamCreateURL(url, 0, Aes67Native.BASS_STREAM_DECODE, IntPtr.Zero, IntPtr.Zero);
     Console.WriteLine($"BASS_StreamCreateURL: {Bass.BASS_ErrorGetCode()}");
-/*
-    if (!BassSrtNative.BASS_ChannelPlay(stream, false))
-    {
-        Console.WriteLine($"\n[Reconnect] Failed to start playback (error: {BassSrtNative.BASS_ErrorGetCode()})");
-        return false;
-    }
-*/
 
     //Add inputStream stream to mixer
     BassMix.BASS_Mixer_StreamAddChannel(mixer, stream, BASSFlag.BASS_STREAM_AUTOFREE);
