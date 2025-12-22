@@ -1,0 +1,207 @@
+@page "/audio-player"
+@inject IJSRuntime JS
+@inject BlazorServerApp.Services.AudioEncoderService EncoderService
+@implements IAsyncDisposable
+
+<PageTitle>Audio Player</PageTitle>
+
+<h1>Audio Player</h1>
+
+<div class="audio-player-container">
+    <div class="player-status">
+        <h3>Player Status</h3>
+        <p>State: <strong>@playerState</strong></p>
+        <p>Frames Received: <strong>@framesReceived</strong></p>
+    </div>
+
+    <div class="encoder-status">
+        <h3>Encoder Status</h3>
+        <p>Running: <strong>@(EncoderService.IsRunning ? "Yes" : "No")</strong></p>
+        <p>Connected Clients: <strong>@EncoderService.ClientCount</strong></p>
+        @if (EncoderService.IsRunning)
+        {
+            var stats = EncoderService.GetStats();
+            <p>Frames Encoded: <strong>@stats.FramesEncoded</strong></p>
+            <p>Underruns: <strong>@stats.Underruns</strong></p>
+        }
+    </div>
+
+    <div class="controls">
+        @if (!isPlaying)
+        {
+            <button class="btn btn-primary" @onclick="StartPlayback" disabled="@isConnecting">
+                @(isConnecting ? "Connecting..." : "Start Playback")
+            </button>
+        }
+        else
+        {
+            <button class="btn btn-danger" @onclick="StopPlayback">
+                Stop Playback
+            </button>
+        }
+    </div>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger mt-3">
+            @errorMessage
+        </div>
+    }
+</div>
+
+<style>
+    .audio-player-container {
+        max-width: 600px;
+        margin: 20px auto;
+        padding: 20px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+    }
+    .player-status, .encoder-status {
+        margin-bottom: 20px;
+        padding: 15px;
+        background-color: #f8f9fa;
+        border-radius: 4px;
+    }
+    .controls {
+        text-align: center;
+        margin-top: 20px;
+    }
+    .controls button {
+        min-width: 150px;
+    }
+</style>
+
+@code {
+    private IJSObjectReference? jsModule;
+    private IJSObjectReference? player;
+    private bool isPlaying = false;
+    private bool isConnecting = false;
+    private string playerState = "Stopped";
+    private int framesReceived = 0;
+    private string? errorMessage;
+    private System.Threading.Timer? statusTimer;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Load the opus-player.js module
+            jsModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/opus-player.js");
+
+            // Start status update timer
+            statusTimer = new System.Threading.Timer(async _ =>
+            {
+                await UpdateStatus();
+                await InvokeAsync(StateHasChanged);
+            }, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(500));
+        }
+    }
+
+    private async Task StartPlayback()
+    {
+        try
+        {
+            isConnecting = true;
+            errorMessage = null;
+            StateHasChanged();
+
+            // Create player instance
+            player = await JS.InvokeAsync<IJSObjectReference>("createOpusPlayer");
+
+            // Build WebSocket URL dynamically from browser location
+            var wsUrl = await JS.InvokeAsync<string>("eval",
+                "(window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host + '/audio-ws'");
+
+            // Start playback (connects to WebSocket)
+            var success = await player.InvokeAsync<bool>("start", wsUrl);
+
+            if (success)
+            {
+                isPlaying = true;
+                playerState = "Playing";
+            }
+            else
+            {
+                errorMessage = "Failed to start playback";
+                playerState = "Error";
+                await DisposePlayer();
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Playback error: {ex.Message}";
+            playerState = "Error";
+            await DisposePlayer();
+        }
+        finally
+        {
+            isConnecting = false;
+        }
+    }
+
+    private async Task StopPlayback()
+    {
+        await DisposePlayer();
+        isPlaying = false;
+        playerState = "Stopped";
+        framesReceived = 0;
+    }
+
+    private async Task UpdateStatus()
+    {
+        if (player != null && isPlaying)
+        {
+            try
+            {
+                var state = await player.InvokeAsync<PlayerState>("getState");
+                framesReceived = state.FramesReceived;
+                playerState = state.IsPlaying ? "Playing" : "Stopped";
+
+                if (!state.IsPlaying && isPlaying)
+                {
+                    // Connection lost
+                    isPlaying = false;
+                    playerState = "Disconnected";
+                }
+            }
+            catch
+            {
+                // Ignore errors during status update
+            }
+        }
+    }
+
+    private async Task DisposePlayer()
+    {
+        if (player != null)
+        {
+            try
+            {
+                await player.InvokeVoidAsync("stop");
+                await player.DisposeAsync();
+            }
+            catch { }
+            player = null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        statusTimer?.Dispose();
+        await DisposePlayer();
+
+        if (jsModule != null)
+        {
+            await jsModule.DisposeAsync();
+        }
+    }
+
+    private class PlayerState
+    {
+        public bool IsPlaying { get; set; }
+        public int WebSocketState { get; set; }
+        public string AudioContextState { get; set; } = "";
+        public int FramesReceived { get; set; }
+    }
+}

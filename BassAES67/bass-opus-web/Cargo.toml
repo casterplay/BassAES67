@@ -1,0 +1,18 @@
+[package]
+name = "bass-opus-web"
+version = "0.1.0"
+edition = "2021"
+description = "BASS to Opus encoder for web streaming"
+
+[lib]
+crate-type = ["cdylib"]
+name = "bass_opus_web"
+
+[dependencies]
+# Minimal dependencies - callback approach, no async runtime needed
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }
