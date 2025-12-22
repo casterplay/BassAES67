@@ -4,10 +4,12 @@
 //! - PCM L16: Raw 16-bit signed little-endian (no encoding needed)
 //! - OPUS: Low-latency audio codec (libopus)
 //! - MP2: MPEG Audio Layer 2 broadcast standard (libtwolame/libmpg123)
+//! - FLAC: Free Lossless Audio Codec (libFLAC)
 
 pub mod opus;
 pub mod twolame;
 pub mod mpg123;
+pub mod flac;
 
 /// Common codec error type
 #[derive(Debug)]

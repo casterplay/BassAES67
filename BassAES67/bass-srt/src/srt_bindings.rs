@@ -85,71 +85,102 @@ pub enum SrtTranstype {
     Invalid = 2,
 }
 
-// SRT statistics structure (simplified - commonly used fields)
+// SRT statistics structure - must match CBytePerfMon from srt.h exactly
 #[repr(C)]
 #[derive(Debug, Clone, Default)]
 pub struct SrtTraceStats {
     // Global measurements
-    pub ms_time_stamp: i64,           // Time since SRT started (ms)
-    pub pkt_sent_total: i64,          // Total packets sent
-    pub pkt_recv_total: i64,          // Total packets received
-    pub pkt_sent_loss_total: i32,     // Total lost packets (sender)
-    pub pkt_recv_loss_total: i32,     // Total lost packets (receiver)
-    pub pkt_retrans_total: i32,       // Total retransmitted packets
-    pub pkt_sent_ack_total: i32,      // Total ACK packets sent
-    pub pkt_recv_ack_total: i32,      // Total ACK packets received
-    pub pkt_sent_nak_total: i32,      // Total NAK packets sent
-    pub pkt_recv_nak_total: i32,      // Total NAK packets received
-    pub us_snd_duration_total: i64,   // Total time spent sending (us)
+    pub ms_time_stamp: i64,              // Time since SRT started (ms)
+    pub pkt_sent_total: i64,             // Total packets sent
+    pub pkt_recv_total: i64,             // Total packets received
+    pub pkt_snd_loss_total: i32,         // Total lost packets (sender)
+    pub pkt_rcv_loss_total: i32,         // Total lost packets (receiver)
+    pub pkt_retrans_total: i32,          // Total retransmitted packets
+    pub pkt_sent_ack_total: i32,         // Total ACK packets sent
+    pub pkt_recv_ack_total: i32,         // Total ACK packets received
+    pub pkt_sent_nak_total: i32,         // Total NAK packets sent
+    pub pkt_recv_nak_total: i32,         // Total NAK packets received
+    pub us_snd_duration_total: i64,      // Total time spent sending (us)
+    // Added fields after us_snd_duration_total
+    pub pkt_snd_drop_total: i32,         // Too-late-to-send dropped packets
+    pub pkt_rcv_drop_total: i32,         // Too-late-to-play missing packets
+    pub pkt_rcv_undecrypt_total: i32,    // Undecrypted packets
+    pub byte_sent_total: u64,            // Total bytes sent
+    pub byte_recv_total: u64,            // Total bytes received
+    pub byte_rcv_loss_total: u64,        // Total lost bytes
+    pub byte_retrans_total: u64,         // Total retransmitted bytes
+    pub byte_snd_drop_total: u64,        // Too-late-to-send dropped bytes
+    pub byte_rcv_drop_total: u64,        // Too-late-to-play missing bytes
+    pub byte_rcv_undecrypt_total: u64,   // Undecrypted bytes
+
+    // Local measurements
+    pub pkt_sent: i64,                   // Packets sent
+    pub pkt_recv: i64,                   // Packets received
+    pub pkt_snd_loss: i32,               // Lost packets (sender)
+    pub pkt_rcv_loss: i32,               // Lost packets (receiver)
+    pub pkt_retrans: i32,                // Retransmitted packets
+    pub pkt_rcv_retrans: i32,            // Received retransmitted
+    pub pkt_sent_ack: i32,               // ACK packets sent
+    pub pkt_recv_ack: i32,               // ACK packets received
+    pub pkt_sent_nak: i32,               // NAK packets sent
+    pub pkt_recv_nak: i32,               // NAK packets received
+    pub mbs_send_rate: f64,              // Send rate (Mbps)
+    pub mbs_recv_rate: f64,              // Receive rate (Mbps)
+    pub us_snd_duration: i64,            // Time spent sending (us)
+    pub pkt_reorder_distance: i32,       // Reorder distance
+    pub pkt_rcv_avg_belated_time: f64,   // Average belated time
+    pub pkt_rcv_belated: i64,            // Belated packets
+    // Added fields after pkt_rcv_belated
+    pub pkt_snd_drop: i32,               // Too-late-to-send dropped packets
+    pub pkt_rcv_drop: i32,               // Too-late-to-play missing packets
+    pub pkt_rcv_undecrypt: i32,          // Undecrypted packets
+    pub byte_sent: u64,                  // Bytes sent
+    pub byte_recv: u64,                  // Bytes received
+    pub byte_rcv_loss: u64,              // Lost bytes
+    pub byte_retrans: u64,               // Retransmitted bytes
+    pub byte_snd_drop: u64,              // Too-late-to-send dropped bytes
+    pub byte_rcv_drop: u64,              // Too-late-to-play missing bytes
+    pub byte_rcv_undecrypt: u64,         // Undecrypted bytes
 
     // Instant measurements
-    pub pkt_sent: i64,                // Packets sent
-    pub pkt_recv: i64,                // Packets received
-    pub pkt_sent_loss: i32,           // Lost packets (sender)
-    pub pkt_recv_loss: i32,           // Lost packets (receiver)
-    pub pkt_retrans: i32,             // Retransmitted packets
-    pub pkt_recv_retrans: i32,        // Received retransmitted
-    pub pkt_sent_ack: i32,            // ACK packets sent
-    pub pkt_recv_ack: i32,            // ACK packets received
-    pub pkt_sent_nak: i32,            // NAK packets sent
-    pub pkt_recv_nak: i32,            // NAK packets received
-    pub mbs_send_rate: f64,           // Send rate (Mbps)
-    pub mbs_recv_rate: f64,           // Receive rate (Mbps)
-    pub us_snd_duration: i64,         // Time spent sending (us)
-    pub pkt_reorder_distance: i32,    // Reorder distance
-    pub pkt_recv_avg_belated_time: f64, // Average belated time
-    pub pkt_recv_belated: i64,        // Belated packets
-
-    // Sender side
-    pub pkt_snd_filter_extra: i32,    // Filter overhead (sender)
-    pub pkt_rcv_filter_extra: i32,    // Filter overhead (receiver)
-    pub pkt_rcv_filter_supply: i32,   // Filter recovery (receiver)
-    pub pkt_rcv_filter_loss: i32,     // Filter loss (receiver)
+    pub us_pkt_snd_period: f64,          // Packet sending period (us)
+    pub pkt_flow_window: i32,            // Flow window size
+    pub pkt_congestion_window: i32,      // Congestion window size
+    pub pkt_flight_size: i32,            // Packets in flight
+    pub ms_rtt: f64,                     // Round-trip time (ms)
+    pub mbs_bandwidth: f64,              // Estimated bandwidth (Mbps)
+    pub byte_avail_snd_buf: i32,         // Available send buffer (bytes)
+    pub byte_avail_rcv_buf: i32,         // Available receive buffer (bytes)
+    // Added fields
+    pub mbs_max_bw: f64,                 // Maximum bandwidth (Mbps)
+    pub byte_mss: i32,                   // MSS (bytes)
 
     // Buffer info
-    pub pkt_snd_buf: i32,             // Packets in send buffer
-    pub byte_snd_buf: i32,            // Bytes in send buffer
-    pub ms_snd_buf: i32,              // Send buffer delay (ms)
-    pub ms_snd_tsbpd_delay: i32,      // Send TSBPD delay
-    pub pkt_rcv_buf: i32,             // Packets in receive buffer
-    pub byte_rcv_buf: i32,            // Bytes in receive buffer
-    pub ms_rcv_buf: i32,              // Receive buffer delay (ms)
-    pub ms_rcv_tsbpd_delay: i32,      // Receive TSBPD delay
+    pub pkt_snd_buf: i32,                // Packets in send buffer
+    pub byte_snd_buf: i32,               // Bytes in send buffer
+    pub ms_snd_buf: i32,                 // Send buffer delay (ms)
+    pub ms_snd_tsbpd_delay: i32,         // Send TSBPD delay
+    pub pkt_rcv_buf: i32,                // Packets in receive buffer
+    pub byte_rcv_buf: i32,               // Bytes in receive buffer
+    pub ms_rcv_buf: i32,                 // Receive buffer delay (ms)
+    pub ms_rcv_tsbpd_delay: i32,         // Receive TSBPD delay
 
-    // Connection info
-    pub pkt_flight_size: i32,         // Packets in flight
-    pub ms_rtt: f64,                  // Round-trip time (ms)
-    pub mbs_bandwidth: f64,           // Estimated bandwidth (Mbps)
-    pub byte_avail_snd_buf: i32,      // Available send buffer (bytes)
-    pub byte_avail_rcv_buf: i32,      // Available receive buffer (bytes)
-    pub mbs_max_bw: f64,              // Maximum bandwidth (Mbps)
-    pub byte_mss: i32,                // MSS (bytes)
-    pub pkt_snd_period: f64,          // Send period (us)
-    pub pkt_flow_window: i32,         // Flow window
-    pub pkt_congestion_window: i32,   // Congestion window
-    pub pkt_recv_undecrypt: i32,      // Undecrypted packets
-    pub byte_recv_undecrypt: i64,     // Undecrypted bytes
-    pub byte_recv_undecrypt_total: i64, // Total undecrypted bytes
+    // Filter stats
+    pub pkt_snd_filter_extra_total: i32, // Filter overhead (sender) total
+    pub pkt_rcv_filter_extra_total: i32, // Filter overhead (receiver) total
+    pub pkt_rcv_filter_supply_total: i32,// Filter recovery total
+    pub pkt_rcv_filter_loss_total: i32,  // Filter loss total
+    pub pkt_snd_filter_extra: i32,       // Filter overhead (sender)
+    pub pkt_rcv_filter_extra: i32,       // Filter overhead (receiver)
+    pub pkt_rcv_filter_supply: i32,      // Filter recovery
+    pub pkt_rcv_filter_loss: i32,        // Filter loss
+    pub pkt_reorder_tolerance: i32,      // Reorder tolerance
+
+    // Stats added in 1.5.0
+    pub pkt_sent_unique_total: i64,      // Total unique data packets sent
+    pub pkt_recv_unique_total: i64,      // Total unique packets to receive
+    pub byte_sent_unique_total: u64,     // Total unique bytes sent
+    pub byte_recv_unique_total: u64,     // Total unique bytes to receive
 }
 
 // Sockaddr structures for network addressing

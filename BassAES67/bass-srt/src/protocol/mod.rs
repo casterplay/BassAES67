@@ -27,6 +27,7 @@ pub const TYPE_JSON: u8 = 0x02;
 pub const FORMAT_PCM_L16: u8 = 0x00;
 pub const FORMAT_OPUS: u8 = 0x01;
 pub const FORMAT_MP2: u8 = 0x02;
+pub const FORMAT_FLAC: u8 = 0x03;
 
 // JSON formats (when Type = TYPE_JSON)
 pub const FORMAT_JSON_UTF8: u8 = 0x00;
@@ -110,6 +111,7 @@ impl PacketHeader {
             (TYPE_AUDIO, FORMAT_PCM_L16) => "PCM L16",
             (TYPE_AUDIO, FORMAT_OPUS) => "OPUS",
             (TYPE_AUDIO, FORMAT_MP2) => "MP2",
+            (TYPE_AUDIO, FORMAT_FLAC) => "FLAC",
             (TYPE_JSON, FORMAT_JSON_UTF8) => "JSON UTF-8",
             _ => "Unknown",
         }

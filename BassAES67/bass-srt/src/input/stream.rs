@@ -21,8 +21,8 @@ use crate::ffi::*;
 use crate::ffi::addon::AddonFunctions;
 use crate::srt_bindings::{self, SockaddrIn, SrtSockStatus, SrtTranstype};
 use crate::protocol::{self, PacketHeader, HEADER_SIZE, TYPE_AUDIO, TYPE_JSON};
-use crate::protocol::{FORMAT_PCM_L16, FORMAT_OPUS, FORMAT_MP2};
-use crate::codec::{opus, mpg123};
+use crate::protocol::{FORMAT_PCM_L16, FORMAT_OPUS, FORMAT_MP2, FORMAT_FLAC};
+use crate::codec::{opus, mpg123, flac};
 
 /// Callback type for JSON metadata
 /// Called with: json string pointer, length, user data pointer
@@ -59,6 +59,8 @@ enum DecoderType {
     Opus(opus::Decoder),
     /// MP2/MP3 decoder
     Mp2(mpg123::Decoder),
+    /// FLAC decoder
+    Flac(flac::Decoder),
 }
 
 impl AudioDecoder {
@@ -84,6 +86,9 @@ impl AudioDecoder {
                 (DecoderType::Mp2(decoder), FORMAT_MP2) => {
                     let mut i16_buf = vec![0i16; output.len()];
                     let _ = decoder.decode(data, &mut i16_buf);
+                }
+                (DecoderType::Flac(decoder), FORMAT_FLAC) => {
+                    let _ = decoder.decode(data, output);
                 }
                 _ => {}
             }
@@ -130,6 +135,14 @@ impl AudioDecoder {
             (_, FORMAT_MP2) => {
                 Err("MP2 decoder not initialized".to_string())
             }
+            (DecoderType::Flac(decoder), FORMAT_FLAC) => {
+                // FLAC decode returns total float samples (already interleaved)
+                decoder.decode(data, output)
+                    .map_err(|e| format!("FLAC decode error: {}", e))
+            }
+            (_, FORMAT_FLAC) => {
+                Err("FLAC decoder not initialized".to_string())
+            }
             _ => {
                 Err(format!("Unknown audio format: 0x{:02x}", format))
             }
@@ -165,6 +178,17 @@ impl AudioDecoder {
                 }
                 Ok(())
             }
+            FORMAT_FLAC => {
+                if !matches!(self.decoder, DecoderType::Flac(_)) {
+                    self.decoder = DecoderType::Flac(
+                        flac::Decoder::new_48k_stereo()
+                            .map_err(|e| format!("Failed to create FLAC decoder: {}", e))?
+                    );
+                    // FLAC needs a frame or two for initialization
+                    self.warmup_frames = 2;
+                }
+                Ok(())
+            }
             _ => Err(format!("Unknown format: 0x{:02x}", format))
         }
     }
@@ -175,6 +199,7 @@ pub const CODEC_UNKNOWN: u32 = 0;
 pub const CODEC_PCM: u32 = 1;
 pub const CODEC_OPUS: u32 = 2;
 pub const CODEC_MP2: u32 = 3;
+pub const CODEC_FLAC: u32 = 4;
 
 use std::sync::atomic::AtomicU32;
 
@@ -190,6 +215,18 @@ struct StreamStats {
     detected_bitrate: AtomicU32,  // kbps
     encrypted: AtomicBoolStats,   // true if passphrase was set
     connection_mode: AtomicU32,   // 0=caller, 1=listener, 2=rendezvous
+
+    // SRT transport stats (updated periodically from srt_bstats)
+    rtt_ms_x10: AtomicU32,        // RTT × 10 for 0.1ms precision
+    bandwidth_kbps: AtomicU32,    // Estimated bandwidth
+    send_rate_kbps: AtomicU32,    // Current send rate
+    recv_rate_kbps: AtomicU32,    // Current receive rate
+    loss_total: AtomicU32,        // Total lost packets
+    retrans_total: AtomicU32,     // Total retransmitted
+    drop_total: AtomicU32,        // Total dropped (late)
+    flight_size: AtomicU32,       // Packets in flight
+    recv_buffer_ms: AtomicU32,    // Receiver buffer delay
+    uptime_secs: AtomicU32,       // Connection uptime
 }
 
 impl StreamStats {
@@ -203,6 +240,17 @@ impl StreamStats {
             detected_bitrate: AtomicU32::new(0),
             encrypted: AtomicBoolStats::new(false),
             connection_mode: AtomicU32::new(0),
+            // SRT transport stats
+            rtt_ms_x10: AtomicU32::new(0),
+            bandwidth_kbps: AtomicU32::new(0),
+            send_rate_kbps: AtomicU32::new(0),
+            recv_rate_kbps: AtomicU32::new(0),
+            loss_total: AtomicU32::new(0),
+            retrans_total: AtomicU32::new(0),
+            drop_total: AtomicU32::new(0),
+            flight_size: AtomicU32::new(0),
+            recv_buffer_ms: AtomicU32::new(0),
+            uptime_secs: AtomicU32::new(0),
         }
     }
 }
@@ -385,32 +433,42 @@ impl SrtStream {
 
         match config.mode {
             ConnectionMode::Caller => {
-                // Caller mode: connect to remote listener
-                let sock = match srt_bindings::create_socket() {
-                    Ok(s) => s,
-                    Err(_) => {
-                        srt_bindings::cleanup().ok();
-                        ended.store(true, Ordering::SeqCst);
-                        return;
+                // Caller mode with automatic reconnection
+                while running.load(Ordering::SeqCst) {
+                    let sock = match srt_bindings::create_socket() {
+                        Ok(s) => s,
+                        Err(_) => {
+                            // Failed to create socket - wait and retry
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                            continue;
+                        }
+                    };
+
+                    if configure_socket(sock).is_err() {
+                        srt_bindings::close(sock).ok();
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        continue;
                     }
-                };
 
-                if configure_socket(sock).is_err() {
+                    if srt_bindings::connect(sock, &addr).is_err() {
+                        srt_bindings::close(sock).ok();
+                        // Connection failed - wait and retry
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        continue;
+                    }
+
+                    // Connected - receive until disconnect
+                    Self::receive_from_socket(sock, &running, &ended, &stats, &mut producer, &config);
                     srt_bindings::close(sock).ok();
-                    srt_bindings::cleanup().ok();
-                    ended.store(true, Ordering::SeqCst);
-                    return;
-                }
 
-                if srt_bindings::connect(sock, &addr).is_err() {
-                    srt_bindings::close(sock).ok();
-                    srt_bindings::cleanup().ok();
-                    ended.store(true, Ordering::SeqCst);
-                    return;
-                }
+                    // Check if we should stop before attempting reconnect
+                    if !running.load(Ordering::SeqCst) {
+                        break;
+                    }
 
-                Self::receive_from_socket(sock, &running, &ended, &stats, &mut producer, &config);
-                srt_bindings::close(sock).ok();
+                    // Small delay before reconnecting
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
             }
 
             ConnectionMode::Listener => {
@@ -544,6 +602,9 @@ impl SrtStream {
         // Track whether we're receiving framed or unframed data
         let mut framed_mode: Option<bool> = None;
 
+        // Counter for periodic SRT stats update
+        let mut packets_since_stats_update: u32 = 0;
+
         while running.load(Ordering::SeqCst) {
             // Check socket state
             let state = srt_bindings::get_sock_state(sock);
@@ -556,6 +617,24 @@ impl SrtStream {
                 Ok(len) if len > 0 => {
                     stats.packets_received.fetch_add(1, Ordering::Relaxed);
                     stats.bytes_received.fetch_add(len as u64, Ordering::Relaxed);
+
+                    // Periodically update SRT transport stats (every 20 packets ~= 100-500ms)
+                    packets_since_stats_update += 1;
+                    if packets_since_stats_update >= 20 {
+                        packets_since_stats_update = 0;
+                        if let Ok(perf) = srt_bindings::get_stats(sock, false) {
+                            stats.rtt_ms_x10.store((perf.ms_rtt * 10.0) as u32, Ordering::Relaxed);
+                            stats.bandwidth_kbps.store((perf.mbs_bandwidth * 1000.0) as u32, Ordering::Relaxed);
+                            stats.send_rate_kbps.store((perf.mbs_send_rate * 1000.0) as u32, Ordering::Relaxed);
+                            stats.recv_rate_kbps.store((perf.mbs_recv_rate * 1000.0) as u32, Ordering::Relaxed);
+                            stats.loss_total.store(perf.pkt_rcv_loss_total as u32, Ordering::Relaxed);
+                            stats.retrans_total.store(perf.pkt_retrans_total as u32, Ordering::Relaxed);
+                            stats.drop_total.store(perf.pkt_rcv_drop_total as u32, Ordering::Relaxed);
+                            stats.flight_size.store(perf.pkt_flight_size as u32, Ordering::Relaxed);
+                            stats.recv_buffer_ms.store(perf.ms_rcv_buf as u32, Ordering::Relaxed);
+                            stats.uptime_secs.store((perf.ms_time_stamp / 1000) as u32, Ordering::Relaxed);
+                        }
+                    }
 
                     let data = &recv_buf[..len];
 
@@ -587,6 +666,7 @@ impl SrtStream {
                                             FORMAT_PCM_L16 => CODEC_PCM,
                                             FORMAT_OPUS => CODEC_OPUS,
                                             FORMAT_MP2 => CODEC_MP2,
+                                            FORMAT_FLAC => CODEC_FLAC,
                                             _ => CODEC_UNKNOWN,
                                         };
                                         stats.detected_codec.store(codec, Ordering::Relaxed);
@@ -606,6 +686,12 @@ impl SrtStream {
                                                 let frame_duration_ms = 24.0;
                                                 let bits = header.length as f32 * 8.0;
                                                 (bits / frame_duration_ms) as u32  // kbps
+                                            }
+                                            FORMAT_FLAC => {
+                                                // FLAC: 1152 samples at 48kHz = 24ms (same as MP2)
+                                                let frame_duration_ms = 24.0;
+                                                let bits = header.length as f32 * 8.0;
+                                                (bits / frame_duration_ms) as u32  // kbps (variable)
                                             }
                                             _ => 0,
                                         };
@@ -846,6 +932,47 @@ impl SrtStream {
 
     pub fn connection_mode(&self) -> u32 {
         self.stats.connection_mode.load(Ordering::Relaxed)
+    }
+
+    // SRT transport statistics accessors
+    pub fn rtt_ms_x10(&self) -> u32 {
+        self.stats.rtt_ms_x10.load(Ordering::Relaxed)
+    }
+
+    pub fn bandwidth_kbps(&self) -> u32 {
+        self.stats.bandwidth_kbps.load(Ordering::Relaxed)
+    }
+
+    pub fn send_rate_kbps(&self) -> u32 {
+        self.stats.send_rate_kbps.load(Ordering::Relaxed)
+    }
+
+    pub fn recv_rate_kbps(&self) -> u32 {
+        self.stats.recv_rate_kbps.load(Ordering::Relaxed)
+    }
+
+    pub fn loss_total(&self) -> u32 {
+        self.stats.loss_total.load(Ordering::Relaxed)
+    }
+
+    pub fn retrans_total(&self) -> u32 {
+        self.stats.retrans_total.load(Ordering::Relaxed)
+    }
+
+    pub fn drop_total(&self) -> u32 {
+        self.stats.drop_total.load(Ordering::Relaxed)
+    }
+
+    pub fn flight_size(&self) -> u32 {
+        self.stats.flight_size.load(Ordering::Relaxed)
+    }
+
+    pub fn recv_buffer_ms(&self) -> u32 {
+        self.stats.recv_buffer_ms.load(Ordering::Relaxed)
+    }
+
+    pub fn uptime_secs(&self) -> u32 {
+        self.stats.uptime_secs.load(Ordering::Relaxed)
     }
 }
 

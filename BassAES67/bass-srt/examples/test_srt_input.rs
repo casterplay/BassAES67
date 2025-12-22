@@ -65,11 +65,19 @@ const BASS_CONFIG_SRT_UNDERRUNS: DWORD = 0x21004;
 const BASS_CONFIG_SRT_CODEC: DWORD = 0x21005;
 const BASS_CONFIG_SRT_BITRATE: DWORD = 0x21006;
 
+// SRT transport statistics
+const BASS_CONFIG_SRT_RTT: DWORD = 0x21020;
+const BASS_CONFIG_SRT_BANDWIDTH: DWORD = 0x21021;
+const BASS_CONFIG_SRT_LOSS_TOTAL: DWORD = 0x21024;
+const BASS_CONFIG_SRT_RETRANS_TOTAL: DWORD = 0x21025;
+const BASS_CONFIG_SRT_UPTIME: DWORD = 0x21029;
+
 // Codec values
 const CODEC_UNKNOWN: DWORD = 0;
 const CODEC_PCM: DWORD = 1;
 const CODEC_OPUS: DWORD = 2;
 const CODEC_MP2: DWORD = 3;
+const CODEC_FLAC: DWORD = 4;
 
 fn main() {
     // Parse command line arguments
@@ -188,10 +196,18 @@ fn main() {
             let codec = BASS_GetConfig(BASS_CONFIG_SRT_CODEC);
             let bitrate = BASS_GetConfig(BASS_CONFIG_SRT_BITRATE);
 
+            // Get SRT transport stats
+            let rtt_x10 = BASS_GetConfig(BASS_CONFIG_SRT_RTT);
+            let bandwidth = BASS_GetConfig(BASS_CONFIG_SRT_BANDWIDTH);
+            let loss = BASS_GetConfig(BASS_CONFIG_SRT_LOSS_TOTAL);
+            let retrans = BASS_GetConfig(BASS_CONFIG_SRT_RETRANS_TOTAL);
+            let uptime = BASS_GetConfig(BASS_CONFIG_SRT_UPTIME);
+
             let codec_str = match codec {
                 CODEC_PCM => "PCM",
                 CODEC_OPUS => "OPUS",
                 CODEC_MP2 => "MP2",
+                CODEC_FLAC => "FLAC",
                 _ => "?",
             };
 
@@ -202,30 +218,38 @@ fn main() {
                 "-".to_string()
             };
 
+            // Format RTT (stored as ms × 10)
+            let rtt_ms = rtt_x10 as f32 / 10.0;
+
             // Calculate packets per second
             let pps = packets.saturating_sub(last_packets) * 2;  // Updates every 500ms
             last_packets = packets;
 
-            // Create level meter
-            let meter_width = 20;
+            // Create level meter (shorter to fit more stats)
+            let meter_width = 10;
             let left_bars = (left as usize * meter_width / 100).min(meter_width);
             let right_bars = (right as usize * meter_width / 100).min(meter_width);
             let left_meter: String = "█".repeat(left_bars) + &" ".repeat(meter_width - left_bars);
             let right_meter: String = "█".repeat(right_bars) + &" ".repeat(meter_width - right_bars);
 
-            // Clear line and print status
+            // Format uptime as mm:ss
+            let uptime_min = uptime / 60;
+            let uptime_sec = uptime % 60;
+
+            // Clear line and print status (two lines for more detail)
             print!("\r\x1b[K");
-            print!("{:8} [{:4} {:>4}] L[{}] R[{}] | Buf:{:3}% Pkts:{} Drop:{} Under:{} ({}/s)",
+            print!("{:8} [{:4} {:>4}] L[{}] R[{}] | RTT:{:.1}ms BW:{}k Loss:{} Retrans:{} Up:{}:{:02}",
                 state_str,
                 codec_str,
                 bitrate_str,
                 left_meter,
                 right_meter,
-                buffer_level,
-                packets,
-                dropped,
-                underruns,
-                pps
+                rtt_ms,
+                bandwidth,
+                loss,
+                retrans,
+                uptime_min,
+                uptime_sec
             );
             std::io::stdout().flush().unwrap();
 

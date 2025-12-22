@@ -1,0 +1,15 @@
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/bin/Debug/net10.0/srt_dotnet
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/bin/Debug/net10.0/srt_dotnet.deps.json
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/bin/Debug/net10.0/srt_dotnet.runtimeconfig.json
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/bin/Debug/net10.0/srt_dotnet.dll
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/bin/Debug/net10.0/srt_dotnet.pdb
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.GeneratedMSBuildEditorConfig.editorconfig
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.AssemblyInfoInputs.cache
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.AssemblyInfo.cs
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.csproj.CoreCompileInputs.cache
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.sourcelink.json
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.dll
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/refint/srt_dotnet.dll
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.pdb
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.genruntimeconfig.cache
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/ref/srt_dotnet.dll

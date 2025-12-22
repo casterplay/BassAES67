@@ -1,0 +1,34 @@
+Here's what needs to be installed on the deployment system: Required runtime dependencies for libbass_srt.so:
+
+Library	Package (Ubuntu/Debian)	Purpose
+libbass.so	(provided by you)	BASS audio library
+libopus.so.0	libopus0	OPUS codec
+libmpg123.so.0	libmpg123-0	MP2/MP3 decoder
+libFLAC.so.8	libflac8	FLAC codec
+libsrt-gnutls.so.1.4	libsrt1.4-gnutls	SRT transport
+libtwolame.so	libtwolame0	MP2 encoder (not shown but used)
+Install command (Ubuntu/Debian):
+
+sudo apt install libopus0 libmpg123-0 libflac8 libsrt1.4-gnutls libtwolame0
+
+The other libraries (gnutls, nettle, ogg, etc.) are transitive dependencies that come with SRT and FLAC. 
+Nothing is statically linked - all codec libraries are dynamically loaded at runtime. 
+This keeps the .so small but requires the dependencies to be installed. 
+Want me to look into static linking options to reduce deployment dependencies? 
+Or shall we proceed to SRT statistics?
+
+
+
+
+# Ubuntu/Debian based
+RUN apt-get update && apt-get install -y \
+    libopus0 \
+    libmpg123-0 \
+    libflac8 \
+    libsrt1.4-gnutls \
+    libtwolame0 \
+    && rm -rf /var/lib/apt/lists/*
+
+Or for Alpine (smaller image):
+RUN apk add --no-cache opus mpg123 flac libsrt twolame
+

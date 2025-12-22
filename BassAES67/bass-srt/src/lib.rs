@@ -48,10 +48,22 @@ pub const BASS_CONFIG_SRT_BUFFER_LEVEL: DWORD = 0x21001;
 pub const BASS_CONFIG_SRT_PACKETS_RECEIVED: DWORD = 0x21002;
 pub const BASS_CONFIG_SRT_PACKETS_DROPPED: DWORD = 0x21003;
 pub const BASS_CONFIG_SRT_UNDERRUNS: DWORD = 0x21004;
-pub const BASS_CONFIG_SRT_CODEC: DWORD = 0x21005;  // Returns: 0=unknown, 1=PCM, 2=OPUS, 3=MP2
+pub const BASS_CONFIG_SRT_CODEC: DWORD = 0x21005;  // Returns: 0=unknown, 1=PCM, 2=OPUS, 3=MP2, 4=FLAC
 pub const BASS_CONFIG_SRT_BITRATE: DWORD = 0x21006;  // Returns: bitrate in kbps (0 for PCM)
 pub const BASS_CONFIG_SRT_ENCRYPTED: DWORD = 0x21010;  // Returns: 1 if passphrase was set
 pub const BASS_CONFIG_SRT_MODE: DWORD = 0x21011;  // Returns: 0=caller, 1=listener, 2=rendezvous
+
+// SRT transport statistics (0x21020 range)
+pub const BASS_CONFIG_SRT_RTT: DWORD = 0x21020;           // RTT in ms×10 (e.g., 125 = 12.5ms)
+pub const BASS_CONFIG_SRT_BANDWIDTH: DWORD = 0x21021;     // Estimated bandwidth (kbps)
+pub const BASS_CONFIG_SRT_SEND_RATE: DWORD = 0x21022;     // Send rate (kbps)
+pub const BASS_CONFIG_SRT_RECV_RATE: DWORD = 0x21023;     // Receive rate (kbps)
+pub const BASS_CONFIG_SRT_LOSS_TOTAL: DWORD = 0x21024;    // Total lost packets
+pub const BASS_CONFIG_SRT_RETRANS_TOTAL: DWORD = 0x21025; // Total retransmitted packets
+pub const BASS_CONFIG_SRT_DROP_TOTAL: DWORD = 0x21026;    // Total dropped packets (late)
+pub const BASS_CONFIG_SRT_FLIGHT_SIZE: DWORD = 0x21027;   // Packets in flight
+pub const BASS_CONFIG_SRT_RECV_BUFFER_MS: DWORD = 0x21028;// Receiver buffer level (ms)
+pub const BASS_CONFIG_SRT_UPTIME: DWORD = 0x21029;        // Connection uptime (seconds)
 
 // Initialize the plugin
 fn init_plugin() -> bool {
@@ -199,6 +211,137 @@ unsafe extern "system" fn config_handler(
                 if !stream_ptr.is_null() {
                     let stream = &*stream_ptr;
                     *(value as *mut DWORD) = stream.connection_mode();
+                    return TRUE;
+                }
+                *(value as *mut DWORD) = 0;
+                return TRUE;
+            }
+            FALSE
+        }
+        // SRT transport statistics
+        BASS_CONFIG_SRT_RTT => {
+            if !is_set && !value.is_null() {
+                let stream_ptr = input::stream::get_active_stream();
+                if !stream_ptr.is_null() {
+                    let stream = &*stream_ptr;
+                    *(value as *mut DWORD) = stream.rtt_ms_x10();
+                    return TRUE;
+                }
+                *(value as *mut DWORD) = 0;
+                return TRUE;
+            }
+            FALSE
+        }
+        BASS_CONFIG_SRT_BANDWIDTH => {
+            if !is_set && !value.is_null() {
+                let stream_ptr = input::stream::get_active_stream();
+                if !stream_ptr.is_null() {
+                    let stream = &*stream_ptr;
+                    *(value as *mut DWORD) = stream.bandwidth_kbps();
+                    return TRUE;
+                }
+                *(value as *mut DWORD) = 0;
+                return TRUE;
+            }
+            FALSE
+        }
+        BASS_CONFIG_SRT_SEND_RATE => {
+            if !is_set && !value.is_null() {
+                let stream_ptr = input::stream::get_active_stream();
+                if !stream_ptr.is_null() {
+                    let stream = &*stream_ptr;
+                    *(value as *mut DWORD) = stream.send_rate_kbps();
+                    return TRUE;
+                }
+                *(value as *mut DWORD) = 0;
+                return TRUE;
+            }
+            FALSE
+        }
+        BASS_CONFIG_SRT_RECV_RATE => {
+            if !is_set && !value.is_null() {
+                let stream_ptr = input::stream::get_active_stream();
+                if !stream_ptr.is_null() {
+                    let stream = &*stream_ptr;
+                    *(value as *mut DWORD) = stream.recv_rate_kbps();
+                    return TRUE;
+                }
+                *(value as *mut DWORD) = 0;
+                return TRUE;
+            }
+            FALSE
+        }
+        BASS_CONFIG_SRT_LOSS_TOTAL => {
+            if !is_set && !value.is_null() {
+                let stream_ptr = input::stream::get_active_stream();
+                if !stream_ptr.is_null() {
+                    let stream = &*stream_ptr;
+                    *(value as *mut DWORD) = stream.loss_total();
+                    return TRUE;
+                }
+                *(value as *mut DWORD) = 0;
+                return TRUE;
+            }
+            FALSE
+        }
+        BASS_CONFIG_SRT_RETRANS_TOTAL => {
+            if !is_set && !value.is_null() {
+                let stream_ptr = input::stream::get_active_stream();
+                if !stream_ptr.is_null() {
+                    let stream = &*stream_ptr;
+                    *(value as *mut DWORD) = stream.retrans_total();
+                    return TRUE;
+                }
+                *(value as *mut DWORD) = 0;
+                return TRUE;
+            }
+            FALSE
+        }
+        BASS_CONFIG_SRT_DROP_TOTAL => {
+            if !is_set && !value.is_null() {
+                let stream_ptr = input::stream::get_active_stream();
+                if !stream_ptr.is_null() {
+                    let stream = &*stream_ptr;
+                    *(value as *mut DWORD) = stream.drop_total();
+                    return TRUE;
+                }
+                *(value as *mut DWORD) = 0;
+                return TRUE;
+            }
+            FALSE
+        }
+        BASS_CONFIG_SRT_FLIGHT_SIZE => {
+            if !is_set && !value.is_null() {
+                let stream_ptr = input::stream::get_active_stream();
+                if !stream_ptr.is_null() {
+                    let stream = &*stream_ptr;
+                    *(value as *mut DWORD) = stream.flight_size();
+                    return TRUE;
+                }
+                *(value as *mut DWORD) = 0;
+                return TRUE;
+            }
+            FALSE
+        }
+        BASS_CONFIG_SRT_RECV_BUFFER_MS => {
+            if !is_set && !value.is_null() {
+                let stream_ptr = input::stream::get_active_stream();
+                if !stream_ptr.is_null() {
+                    let stream = &*stream_ptr;
+                    *(value as *mut DWORD) = stream.recv_buffer_ms();
+                    return TRUE;
+                }
+                *(value as *mut DWORD) = 0;
+                return TRUE;
+            }
+            FALSE
+        }
+        BASS_CONFIG_SRT_UPTIME => {
+            if !is_set && !value.is_null() {
+                let stream_ptr = input::stream::get_active_stream();
+                if !stream_ptr.is_null() {
+                    let stream = &*stream_ptr;
+                    *(value as *mut DWORD) = stream.uptime_secs();
                     return TRUE;
                 }
                 *(value as *mut DWORD) = 0;
