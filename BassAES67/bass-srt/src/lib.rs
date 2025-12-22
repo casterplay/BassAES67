@@ -18,7 +18,12 @@ use ffi::*;
 use ffi::addon::*;
 
 // Re-export for external use
-pub use output::{SrtOutputStream, SrtOutputConfig, OutputStats};
+pub use output::{
+    SrtOutputStream, SrtOutputConfig, OutputStats,
+    ConnectionMode, OutputCodec,
+    OutputConnectionStateCallback,
+    set_output_connection_state_callback, clear_output_connection_state_callback,
+};
 pub use input::stream::{MetadataCallback, set_metadata_callback, clear_metadata_callback};
 pub use input::stream::{ConnectionStateCallback, set_connection_state_callback, clear_connection_state_callback};
 
@@ -570,4 +575,233 @@ mod unix_init {
     extern "C" fn fini_function() {
         cleanup_plugin();
     }
+}
+
+// ============================================================================
+// SRT OUTPUT C API
+// ============================================================================
+
+use std::os::raw::c_char;
+
+/// FFI-compatible output configuration
+#[repr(C)]
+pub struct SrtOutputConfigFFI {
+    /// Host IP as 4 bytes (a.b.c.d) - network byte order
+    pub host_addr: [u8; 4],
+    /// Port number
+    pub port: u16,
+    /// Connection mode: 0=Caller, 1=Listener
+    pub mode: u8,
+    /// SRT latency in ms
+    pub latency_ms: u32,
+    /// Passphrase pointer (null-terminated string, or null for no encryption)
+    pub passphrase: *const c_char,
+    /// Stream ID pointer (null-terminated string, or null)
+    pub stream_id: *const c_char,
+    /// Number of channels (1 or 2)
+    pub channels: u16,
+    /// Sample rate (e.g., 48000)
+    pub sample_rate: u32,
+    /// Codec: 0=PCM, 1=OPUS, 2=MP2, 3=FLAC
+    pub codec: u8,
+    /// Bitrate in kbps (for OPUS/MP2)
+    pub bitrate_kbps: u32,
+    /// FLAC compression level (0-8)
+    pub flac_level: u8,
+}
+
+/// FFI-compatible output statistics
+#[repr(C)]
+pub struct SrtOutputStatsFFI {
+    pub packets_sent: u64,
+    pub bytes_sent: u64,
+    pub send_errors: u64,
+    pub underruns: u64,
+    pub connection_state: u32,
+}
+
+/// Convert FFI config to Rust config
+fn ffi_to_output_config(ffi: &SrtOutputConfigFFI) -> SrtOutputConfig {
+    let host = format!(
+        "{}.{}.{}.{}",
+        ffi.host_addr[0], ffi.host_addr[1], ffi.host_addr[2], ffi.host_addr[3]
+    );
+
+    let passphrase = if ffi.passphrase.is_null() {
+        None
+    } else {
+        unsafe {
+            CStr::from_ptr(ffi.passphrase)
+                .to_str()
+                .ok()
+                .map(|s| s.to_string())
+        }
+    };
+
+    let stream_id = if ffi.stream_id.is_null() {
+        None
+    } else {
+        unsafe {
+            CStr::from_ptr(ffi.stream_id)
+                .to_str()
+                .ok()
+                .map(|s| s.to_string())
+        }
+    };
+
+    let mode = match ffi.mode {
+        0 => ConnectionMode::Caller,
+        _ => ConnectionMode::Listener,
+    };
+
+    let codec = match ffi.codec {
+        0 => OutputCodec::Pcm,
+        1 => OutputCodec::Opus,
+        2 => OutputCodec::Mp2,
+        3 => OutputCodec::Flac,
+        _ => OutputCodec::Opus,
+    };
+
+    SrtOutputConfig {
+        host,
+        port: ffi.port,
+        mode,
+        latency_ms: ffi.latency_ms,
+        passphrase,
+        stream_id,
+        channels: ffi.channels,
+        sample_rate: ffi.sample_rate,
+        codec,
+        bitrate_kbps: ffi.bitrate_kbps,
+        flac_level: ffi.flac_level as u32,
+    }
+}
+
+/// Create an SRT output stream from a BASS channel.
+///
+/// # Arguments
+/// * `bass_channel` - BASS channel handle (stream or mixer) to read audio from
+/// * `config` - Pointer to output configuration
+///
+/// # Returns
+/// Opaque handle to the output stream, or null on error.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_SRT_OutputCreate(
+    bass_channel: DWORD,
+    config: *const SrtOutputConfigFFI,
+) -> *mut c_void {
+    if config.is_null() {
+        return ptr::null_mut();
+    }
+
+    let rust_config = ffi_to_output_config(&*config);
+
+    match SrtOutputStream::new(bass_channel, rust_config) {
+        Ok(stream) => Box::into_raw(Box::new(stream)) as *mut c_void,
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Start the SRT output stream (begin transmitting).
+///
+/// # Returns
+/// 1 on success, 0 on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_SRT_OutputStart(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let stream = &mut *(handle as *mut SrtOutputStream);
+    match stream.start() {
+        Ok(()) => 1,
+        Err(_) => 0,
+    }
+}
+
+/// Stop the SRT output stream.
+///
+/// # Returns
+/// 1 on success, 0 on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_SRT_OutputStop(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let stream = &mut *(handle as *mut SrtOutputStream);
+    stream.stop();
+    1
+}
+
+/// Get output stream statistics.
+///
+/// # Returns
+/// 1 on success, 0 on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_SRT_OutputGetStats(
+    handle: *mut c_void,
+    stats: *mut SrtOutputStatsFFI,
+) -> i32 {
+    if handle.is_null() || stats.is_null() {
+        return 0;
+    }
+
+    let stream = &*(handle as *mut SrtOutputStream);
+    let rust_stats = stream.stats();
+
+    (*stats).packets_sent = rust_stats.packets_sent;
+    (*stats).bytes_sent = rust_stats.bytes_sent;
+    (*stats).send_errors = rust_stats.send_errors;
+    (*stats).underruns = rust_stats.underruns;
+    (*stats).connection_state = rust_stats.connection_state;
+
+    1
+}
+
+/// Check if the output stream is running.
+///
+/// # Returns
+/// 1 if running, 0 if not running or invalid handle.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_SRT_OutputIsRunning(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let stream = &*(handle as *mut SrtOutputStream);
+    if stream.is_running() { 1 } else { 0 }
+}
+
+/// Destroy the SRT output stream and free resources.
+///
+/// # Returns
+/// 1 on success, 0 on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_SRT_OutputFree(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    // Take ownership and drop
+    let _stream = Box::from_raw(handle as *mut SrtOutputStream);
+    1
+}
+
+/// Set a callback for output connection state changes.
+///
+/// States: 0=disconnected, 1=connecting, 2=connected, 3=reconnecting
+/// The callback is called from the transmitter thread.
+#[no_mangle]
+pub unsafe extern "C" fn BASS_SRT_SetOutputConnectionStateCallback(
+    callback: OutputConnectionStateCallback,
+    user: *mut c_void,
+) {
+    set_output_connection_state_callback(callback, user);
+}
+
+/// Clear the output connection state callback.
+#[no_mangle]
+pub unsafe extern "C" fn BASS_SRT_ClearOutputConnectionStateCallback() {
+    clear_output_connection_state_callback();
 }

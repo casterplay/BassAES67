@@ -1,8 +1,10 @@
 {
   "version": 2,
-  "dgSpecHash": "heDb6QDJNxE=",
+  "dgSpecHash": "m7TLmJVUzfI=",
   "success": true,
   "projectFilePath": "/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/srt_dotnet.csproj",
-  "expectedPackageFiles": [],
+  "expectedPackageFiles": [
+    "/home/kennet/.nuget/packages/radio42.bass.net.core/2.4.17.8/radio42.bass.net.core.2.4.17.8.nupkg.sha512"
+  ],
   "logs": []
 }

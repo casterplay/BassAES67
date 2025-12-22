@@ -1,6 +1,9 @@
 // BASS SRT Plugin Test Application (C#)
 // Usage: dotnet run [srt://host:port]
 
+using System.Net;
+using Un4seen.Bass;
+using Un4seen.Bass.AddOn.Mix;
 using System.Runtime.InteropServices;
 
 // Set native library search path to include the application directory
@@ -38,7 +41,11 @@ Console.WriteLine("=========================\n");
 
 // Parse command line
 string url = args.Length > 0 ? args[0] : "srt://127.0.0.1:9000";
+string interfaceIp = args.Length > 1 ? args[1] : "192.168.60.104";
+string inputMulticast = args.Length > 2 ? args[2] : "239.192.76.49";
+string outputMulticast = args.Length > 3 ? args[3] : "239.192.1.100";
 
+/*
 // Get BASS version
 Console.WriteLine($"BASS version: {BassSrtNative.GetVersionString()}");
 
@@ -50,6 +57,76 @@ if (!BassSrtNative.BASS_Init(-1, 48000, 0, IntPtr.Zero, IntPtr.Zero))
     return;
 }
 Console.WriteLine("BASS initialized successfully");
+*/
+
+// Initialize BASS
+var audioEngine = new AudioEngine();
+audioEngine.InitBass(0);  // device=0 for no-soundcard mode
+
+int mixer = BassMix.BASS_Mixer_StreamCreate(48000, 2, BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_SOFTWARE | BASSFlag.BASS_MIXER_NONSTOP);
+Console.WriteLine($"mixer: {mixer}");
+
+
+// Set clock mode BEFORE creating streams
+int clockModeValue = Aes67Native.BASS_AES67_CLOCK_LIVEWIRE;   // BASS_AES67_CLOCK_PTP, BASS_AES67_CLOCK_LIVEWIRE, BASS_AES67_CLOCK_SYSTEM
+Bass.BASS_SetConfig((BASSConfig)Aes67Native.BASS_CONFIG_AES67_CLOCK_MODE, clockModeValue);
+Console.WriteLine($"Clock mode set to: {Aes67Native.GetClockModeName(clockModeValue)}");
+
+// Configure AES67
+int ptpDomain = 1; 
+Aes67Native.BASS_SetConfigPtr(Aes67Native.BASS_CONFIG_AES67_INTERFACE, interfaceIp);
+Bass.BASS_SetConfig((BASSConfig)Aes67Native.BASS_CONFIG_AES67_JITTER, 10);  // 10ms jitter buffer
+Bass.BASS_SetConfig((BASSConfig)Aes67Native.BASS_CONFIG_AES67_PTP_DOMAIN, ptpDomain); 
+Console.WriteLine($"AES67 configured (interface={interfaceIp}, jitter=10ms, domain={ptpDomain})\n");
+
+// Start clock WITHOUT needing an AES67 input stream!
+Aes67Native.BASS_AES67_ClockStart();
+
+// Create output stream
+    Console.WriteLine("Creating AES67 output stream...");
+    var outputConfig = new Aes67OutputConfig
+    {
+        MulticastAddr = IPAddress.Parse(outputMulticast),
+        Port = 5004,
+        Interface = IPAddress.Parse(interfaceIp),
+        Channels = 2,
+        SampleRate = 48000,
+        PacketTimeUs = 5000  // 5ms for Livewire compatibility
+    };
+
+    using var outputStream = new Aes67OutputStream(outputConfig);
+    //outputStream.Start(inputStream);
+    outputStream.Start(mixer);
+
+Console.WriteLine($"Output stream created (dest: {outputMulticast}:5004, {outputConfig.PacketTimeUs/1000}ms/{outputConfig.PacketsPerSecond}pkt/s)\n");
+
+
+
+
+// Wait for clock lock
+Console.WriteLine($"Waiting for {Aes67Native.GetClockModeName(clockModeValue)} lock...");
+int lockWaitSeconds = 10;
+for (int i = 0; i < lockWaitSeconds * 10; i++)
+{
+    int locked = Bass.BASS_GetConfig((BASSConfig)Aes67Native.BASS_CONFIG_AES67_PTP_LOCKED);
+    int state = Bass.BASS_GetConfig((BASSConfig)Aes67Native.BASS_CONFIG_AES67_PTP_STATE);
+
+    if (locked != 0)
+    {
+        Console.WriteLine($"{Aes67Native.GetClockModeName(clockModeValue)} locked!");
+        break;
+    }
+
+    Console.Write($"\rState: {Aes67Native.GetClockStateName(state)}... ");
+    Thread.Sleep(100);
+
+    if (i == lockWaitSeconds * 10 - 1)
+    {
+        Console.WriteLine("\nWARNING: Clock not locked after timeout, continuing anyway...");
+    }
+}
+Console.WriteLine();
+
 
 // Load the SRT plugin - use absolute path from application directory
 Console.WriteLine("\nLoading SRT plugin...");
@@ -95,26 +172,21 @@ System.Timers.Timer? reconnectTimer = null;
 // Function to create stream and start playback
 bool CreateStreamAndPlay()
 {
-    // Clean up old stream if exists
-    if (stream != 0)
-    {
-        BassSrtNative.BASS_ChannelStop(stream);
-        BassSrtNative.BASS_StreamFree(stream);
-        stream = 0;
-    }
-
-    stream = BassSrtNative.BASS_StreamCreateURL(url, 0, 0, IntPtr.Zero, IntPtr.Zero);
-    if (stream == 0)
-    {
-        Console.WriteLine($"\n[Reconnect] Failed to create stream (error: {BassSrtNative.BASS_ErrorGetCode()})");
-        return false;
-    }
-
+    
+    //stream = BassSrtNative.BASS_StreamCreateURL(url, 0, 0, IntPtr.Zero, IntPtr.Zero);
+    stream = BassSrtNative.BASS_StreamCreateURL(url, 0, Aes67Native.BASS_STREAM_DECODE, IntPtr.Zero, IntPtr.Zero);
+    Console.WriteLine($"BASS_StreamCreateURL: {Bass.BASS_ErrorGetCode()}");
+/*
     if (!BassSrtNative.BASS_ChannelPlay(stream, false))
     {
         Console.WriteLine($"\n[Reconnect] Failed to start playback (error: {BassSrtNative.BASS_ErrorGetCode()})");
         return false;
     }
+*/
+
+    //Add inputStream stream to mixer
+    BassMix.BASS_Mixer_StreamAddChannel(mixer, stream, BASSFlag.BASS_STREAM_AUTOFREE);
+    Console.WriteLine($"BASS_Mixer_StreamAddChannel: {Bass.BASS_ErrorGetCode()}");
 
     return true;
 }
@@ -155,7 +227,7 @@ BassSrtNative.ConnectionStateCallback connectionCallback = (state, user) =>
     {
         Console.WriteLine("[SRT] Sender disconnected.");
         // Schedule reconnection attempt
-        ScheduleReconnect(3000);
+        //ScheduleReconnect(3000);
     }
     else if (state == BassSrtNative.CONNECTION_STATE_CONNECTED)
     {
@@ -173,7 +245,7 @@ if (!CreateStreamAndPlay())
     Console.WriteLine("\nTo test, start the SRT sender first in bass-srt folder:");
     Console.WriteLine("  ./run_sender.sh opus");
     // Don't exit - schedule reconnect attempt
-    ScheduleReconnect(3000);
+    //ScheduleReconnect(3000);
 }
 else
 {
@@ -234,13 +306,10 @@ Console.WriteLine("Done!");
 // Status update function
 void UpdateStatus(int streamHandle)
 {
-    int state = BassSrtNative.BASS_ChannelIsActive(streamHandle);
-    string stateStr = BassSrtNative.GetStateName(state);
+    var state = Bass.BASS_ChannelIsActive(streamHandle);
+    //string stateStr = BassSrtNative.GetStateName(state);
 
-    // Get audio level
-    uint level = BassSrtNative.BASS_ChannelGetLevel(streamHandle);
-    double left = BassSrtNative.GetLeftLevelPercent(level);
-    double right = BassSrtNative.GetRightLevelPercent(level);
+  
 
     // Get SRT stats
     uint codec = BassSrtNative.BASS_GetConfig(BassSrtNative.BASS_CONFIG_SRT_CODEC);
@@ -256,17 +325,12 @@ void UpdateStatus(int streamHandle)
     string bitrateStr = bitrate > 0 ? $"{bitrate}k" : "-";
     string connStr = BassSrtNative.GetConnectionStateName((int)connState);
 
-    // Create level meter
-    int meterWidth = 10;
-    int leftBars = Math.Min((int)(left * meterWidth / 100), meterWidth);
-    int rightBars = Math.Min((int)(right * meterWidth / 100), meterWidth);
-    string leftMeter = new string('#', leftBars).PadRight(meterWidth);
-    string rightMeter = new string('#', rightBars).PadRight(meterWidth);
+
 
     // Format uptime
     uint uptimeMin = uptime / 60;
     uint uptimeSec = uptime % 60;
 
     // Print status
-    Console.Write($"\r{stateStr,-8} {connStr,-12} [{codecStr,4} {bitrateStr,4}] L[{leftMeter}] R[{rightMeter}] | RTT:{rtt:F1}ms Loss:{loss} Up:{uptimeMin}:{uptimeSec:D2}  ");
+    Console.Write($"\r{state,-8} {connStr,-12} [{codecStr,4} {bitrateStr,4}] | RTT:{rtt:F1}ms Loss:{loss} Up:{uptimeMin}:{uptimeSec:D2}  ");
 }

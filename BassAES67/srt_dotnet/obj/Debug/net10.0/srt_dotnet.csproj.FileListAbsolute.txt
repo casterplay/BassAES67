@@ -13,3 +13,6 @@
 /home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.pdb
 /home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.genruntimeconfig.cache
 /home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/ref/srt_dotnet.dll
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.csproj.AssemblyReference.cache
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/bin/Debug/net10.0/Bass.Net.dll
+/home/kennet/dev/BassAES67/BassAES67/srt_dotnet/obj/Debug/net10.0/srt_dotnet.csproj.Up2Date

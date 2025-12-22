@@ -1,11 +1,44 @@
 {
   "version": 3,
   "targets": {
-    "net10.0": {}
+    "net10.0": {
+      "radio42.Bass.Net.core/2.4.17.8": {
+        "type": "package",
+        "compile": {
+          "lib/net6.0/Bass.Net.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net6.0/Bass.Net.dll": {
+            "related": ".xml"
+          }
+        }
+      }
+    }
   },
-  "libraries": {},
+  "libraries": {
+    "radio42.Bass.Net.core/2.4.17.8": {
+      "sha512": "oNI/Q8y3TlEzboNhUho2sYO0vyt6rdD1Bfwsogkz/VGfcpEIZDlryQCiY23L8OIPnjhHyiaUSg7W1Nuy2VYfaw==",
+      "type": "package",
+      "path": "radio42.bass.net.core/2.4.17.8",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "BASS.NET.png",
+        "LICENSE.md",
+        "lib/net6.0/Bass.Net.dll",
+        "lib/net6.0/Bass.Net.xml",
+        "radio42.bass.net.core.2.4.17.8.nupkg.sha512",
+        "radio42.bass.net.core.nuspec",
+        "readme.md"
+      ]
+    }
+  },
   "projectFileDependencyGroups": {
-    "net10.0": []
+    "net10.0": [
+      "radio42.Bass.Net.core >= 2.4.17.8"
+    ]
   },
   "packageFolders": {
     "/home/kennet/.nuget/packages/": {}
@@ -51,6 +84,12 @@
     "frameworks": {
       "net10.0": {
         "targetAlias": "net10.0",
+        "dependencies": {
+          "radio42.Bass.Net.core": {
+            "target": "Package",
+            "version": "[2.4.17.8, )"
+          }
+        },
         "imports": [
           "net461",
           "net462",
