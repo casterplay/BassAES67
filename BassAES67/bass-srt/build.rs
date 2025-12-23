@@ -48,6 +48,10 @@ fn main() {
         let flac_lib_path = libs_path.join("flac-master/build/src/libFLAC/Release");
         println!("cargo:rustc-link-search=native={}", flac_lib_path.display());
 
+        // mpg123 (pre-built x64 binaries)
+        let mpg123_path = libs_path.join("mpg123-1.32.10/mpg123-1.32.10-x86-64");
+        println!("cargo:rustc-link-search=native={}", mpg123_path.display());
+
         // Link libraries
         println!("cargo:rustc-link-lib=dylib=srt");
     }
