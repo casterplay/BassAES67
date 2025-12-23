@@ -41,6 +41,8 @@ path = "examples/aes67_input_lab.rs"
 [dependencies]
 socket2 = { version = "0.5", features = ["all"] }
 ringbuf = "0.4"
+parking_lot = "0.12"
+lazy_static = "1.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }

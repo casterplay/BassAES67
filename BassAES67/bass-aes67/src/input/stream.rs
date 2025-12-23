@@ -160,16 +160,26 @@ impl Aes67Stream {
     }
 
     /// Create and configure the multicast UDP socket.
+    /// Uses socket2 with SO_REUSEADDR to allow multiple streams on the same port.
     fn create_multicast_socket(&self) -> Result<UdpSocket, String> {
-        let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.config.port);
+        use socket2::{Socket, Domain, Type, Protocol};
 
-        let socket = UdpSocket::bind(socket_addr)
-            .map_err(|e| format!("Failed to bind socket to {}: {}", socket_addr, e))?;
+        // Create socket with socket2 to allow setting SO_REUSEADDR before bind
+        let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
+            .map_err(|e| format!("Failed to create socket: {}", e))?;
 
+        // Allow multiple sockets to bind to the same port (required for multi-stream)
+        socket.set_reuse_address(true)
+            .map_err(|e| format!("Failed to set reuse address: {}", e))?;
+
+        // Bind to the port
+        let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.config.port);
+        socket.bind(&bind_addr.into())
+            .map_err(|e| format!("Failed to bind socket to {}: {}", bind_addr, e))?;
+
+        // Join multicast group
         let interface = self.config.interface.unwrap_or(Ipv4Addr::UNSPECIFIED);
-
-        socket
-            .join_multicast_v4(&self.config.multicast_addr, &interface)
+        socket.join_multicast_v4(&self.config.multicast_addr, &interface)
             .map_err(|e| {
                 format!(
                     "Failed to join multicast group {} on interface {}: {}",
@@ -178,11 +188,11 @@ impl Aes67Stream {
             })?;
 
         // Set read timeout for clean shutdown
-        socket
-            .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+        socket.set_read_timeout(Some(std::time::Duration::from_millis(100)))
             .map_err(|e| format!("Failed to set read timeout: {}", e))?;
 
-        Ok(socket)
+        // Convert socket2::Socket to std::net::UdpSocket
+        Ok(socket.into())
     }
 
     /// Receiver thread loop - reads packets and pushes samples to ring buffer.
@@ -490,8 +500,10 @@ pub unsafe extern "system" fn stream_proc(
 /// Free the stream instance
 unsafe extern "system" fn addon_free(inst: *mut c_void) {
     if !inst.is_null() {
-        crate::clear_active_stream(inst as *mut Aes67Stream);
-        let _ = Box::from_raw(inst as *mut Aes67Stream);
+        let stream = inst as *mut Aes67Stream;
+        // Unregister from stream registry before freeing
+        crate::unregister_stream((*stream).handle);
+        let _ = Box::from_raw(stream);
     }
 }
 

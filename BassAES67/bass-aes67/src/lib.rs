@@ -17,11 +17,15 @@ mod clock_bindings;
 // Re-export output module for external use
 pub use output::{Aes67OutputStream, Aes67OutputConfig, OutputStats};
 
+use std::collections::HashMap;
 use std::ffi::{c_void, CStr};
 use std::net::Ipv4Addr;
 use std::ptr;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use lazy_static::lazy_static;
+use parking_lot::RwLock;
 
 use ffi::*;
 use input::{Aes67Stream, Aes67Url, ADDON_FUNCS, stream::stream_proc};
@@ -76,19 +80,37 @@ static mut CONFIG_PTP_ENABLED: DWORD = 1; // Enabled by default
 static mut CONFIG_CLOCK_MODE: DWORD = 0;  // 0=PTP (default), 1=Livewire, 2=System
 static mut CONFIG_FALLBACK_TIMEOUT: DWORD = 5; // 5 seconds default fallback timeout
 
-// Global stream reference for buffer level queries
-// Uses AtomicPtr for thread-safe access without mutex overhead in the audio callback
-static ACTIVE_STREAM: AtomicPtr<Aes67Stream> = AtomicPtr::new(ptr::null_mut());
+// Wrapper for raw pointer to allow Send + Sync in HashMap.
+// This is safe because we carefully manage the pointer lifetime:
+// - Pointer is only added when stream is created
+// - Pointer is removed before stream is freed
+// - All access is through RwLock (synchronized)
+#[derive(Clone, Copy)]
+struct StreamPtr(*mut Aes67Stream);
+unsafe impl Send for StreamPtr {}
+unsafe impl Sync for StreamPtr {}
 
-/// Clear the active stream reference (called when stream is freed)
-pub fn clear_active_stream(stream_ptr: *mut Aes67Stream) {
-    // Only clear if this is the current active stream
-    let _ = ACTIVE_STREAM.compare_exchange(
-        stream_ptr,
-        ptr::null_mut(),
-        Ordering::Release,
-        Ordering::Relaxed,
-    );
+// Stream registry for buffer level queries - supports multiple simultaneous streams.
+// Uses RwLock since registry access is NOT in the audio callback path.
+lazy_static! {
+    static ref STREAM_REGISTRY: RwLock<HashMap<HSTREAM, StreamPtr>> =
+        RwLock::new(HashMap::new());
+}
+
+/// Register a stream in the registry (called when stream is created).
+fn register_stream(handle: HSTREAM, stream: *mut Aes67Stream) {
+    STREAM_REGISTRY.write().insert(handle, StreamPtr(stream));
+}
+
+/// Unregister a stream from the registry (called when stream is freed).
+pub fn unregister_stream(handle: HSTREAM) {
+    STREAM_REGISTRY.write().remove(&handle);
+}
+
+/// Get any registered stream for backwards-compatible stats queries.
+/// Returns the first registered stream, or None if no streams exist.
+fn get_any_stream() -> Option<*mut Aes67Stream> {
+    STREAM_REGISTRY.read().values().next().map(|ptr| ptr.0)
 }
 
 /// Plugin format information - defines what formats this plugin handles
@@ -258,8 +280,7 @@ unsafe extern "system" fn config_handler(option: DWORD, flags: DWORD, value: *mu
             if is_ptr {
                 return FALSE;
             }
-            let stream_ptr = ACTIVE_STREAM.load(Ordering::Relaxed);
-            let level = if !stream_ptr.is_null() {
+            let level = if let Some(stream_ptr) = get_any_stream() {
                 (*stream_ptr).buffer_fill_percent()
             } else {
                 100  // Default to 100% (at target) if no active stream
@@ -275,8 +296,7 @@ unsafe extern "system" fn config_handler(option: DWORD, flags: DWORD, value: *mu
             if is_ptr {
                 return FALSE;
             }
-            let stream_ptr = ACTIVE_STREAM.load(Ordering::Relaxed);
-            let underruns = if !stream_ptr.is_null() {
+            let underruns = if let Some(stream_ptr) = get_any_stream() {
                 (*stream_ptr).jitter_underruns() as DWORD
             } else {
                 0
@@ -292,8 +312,7 @@ unsafe extern "system" fn config_handler(option: DWORD, flags: DWORD, value: *mu
             if is_ptr {
                 return FALSE;
             }
-            let stream_ptr = ACTIVE_STREAM.load(Ordering::Relaxed);
-            let received = if !stream_ptr.is_null() {
+            let received = if let Some(stream_ptr) = get_any_stream() {
                 (*stream_ptr).packets_received() as DWORD
             } else {
                 0
@@ -309,8 +328,7 @@ unsafe extern "system" fn config_handler(option: DWORD, flags: DWORD, value: *mu
             if is_ptr {
                 return FALSE;
             }
-            let stream_ptr = ACTIVE_STREAM.load(Ordering::Relaxed);
-            let late = if !stream_ptr.is_null() {
+            let late = if let Some(stream_ptr) = get_any_stream() {
                 (*stream_ptr).packets_late() as DWORD
             } else {
                 0
@@ -326,8 +344,7 @@ unsafe extern "system" fn config_handler(option: DWORD, flags: DWORD, value: *mu
             if is_ptr {
                 return FALSE;
             }
-            let stream_ptr = ACTIVE_STREAM.load(Ordering::Relaxed);
-            let packets = if !stream_ptr.is_null() {
+            let packets = if let Some(stream_ptr) = get_any_stream() {
                 (*stream_ptr).buffer_packets() as DWORD
             } else {
                 0
@@ -343,8 +360,7 @@ unsafe extern "system" fn config_handler(option: DWORD, flags: DWORD, value: *mu
             if is_ptr {
                 return FALSE;
             }
-            let stream_ptr = ACTIVE_STREAM.load(Ordering::Relaxed);
-            let target = if !stream_ptr.is_null() {
+            let target = if let Some(stream_ptr) = get_any_stream() {
                 (*stream_ptr).target_packets() as DWORD
             } else {
                 0
@@ -360,8 +376,7 @@ unsafe extern "system" fn config_handler(option: DWORD, flags: DWORD, value: *mu
             if is_ptr {
                 return FALSE;
             }
-            let stream_ptr = ACTIVE_STREAM.load(Ordering::Relaxed);
-            let packet_time = if !stream_ptr.is_null() {
+            let packet_time = if let Some(stream_ptr) = get_any_stream() {
                 (*stream_ptr).detected_packet_time_us() as DWORD
             } else {
                 0
@@ -538,8 +553,8 @@ unsafe extern "system" fn stream_create_url(
     (*stream_ptr).handle = handle;
     (*stream_ptr).stream_flags = stream_flags;
 
-    // Store global reference for buffer level queries (used by drift compensation)
-    ACTIVE_STREAM.store(stream_ptr, Ordering::Release);
+    // Register stream for buffer level queries (supports multiple streams)
+    register_stream(handle, stream_ptr);
 
     handle
 }
