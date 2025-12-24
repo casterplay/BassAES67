@@ -2,16 +2,23 @@
 //!
 //! Supported codecs:
 //! - PCM 16-bit: 16-bit signed big-endian (network byte order)
+//! - PCM 20-bit: 20-bit signed big-endian packed in 3 bytes (network byte order)
 //! - PCM 24-bit: 24-bit signed big-endian (network byte order)
 //! - MP2: MPEG Audio Layer 2 broadcast standard (libtwolame/libmpg123)
 //! - OPUS: Low-latency audio codec (libopus)
 //! - FLAC: Free Lossless Audio Codec (libFLAC)
+//! - G.711: Narrowband codec (8kHz)
+//! - G.722: Wideband codec (16kHz)
+//! - AAC: Advanced Audio Coding (FFmpeg)
 
 pub mod pcm;
 pub mod opus;
 pub mod twolame;
 pub mod mpg123;
 pub mod flac;
+pub mod g711;
+pub mod g722;
+pub mod ffmpeg_aac;
 
 pub use pcm::*;
 
@@ -26,6 +33,10 @@ pub enum CodecError {
     BufferTooSmall,
     /// Codec library error with error code
     LibraryError(i32),
+    /// Decode error with message
+    DecodeError(String),
+    /// Encode error with message
+    EncodeError(String),
     /// Other error with message
     Other(String),
 }
@@ -37,6 +48,8 @@ impl std::fmt::Display for CodecError {
             CodecError::InvalidInput => write!(f, "Invalid input data"),
             CodecError::BufferTooSmall => write!(f, "Output buffer too small"),
             CodecError::LibraryError(code) => write!(f, "Codec library error: {}", code),
+            CodecError::DecodeError(msg) => write!(f, "Decode error: {}", msg),
+            CodecError::EncodeError(msg) => write!(f, "Encode error: {}", msg),
             CodecError::Other(msg) => write!(f, "{}", msg),
         }
     }

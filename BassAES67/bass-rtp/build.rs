@@ -29,6 +29,10 @@ fn main() {
         // mpg123
         let mpg123_path = libs_path.join("mpg123-1.32.10/mpg123-1.32.10-x86-64");
         println!("cargo:rustc-link-search=native={}", mpg123_path.display());
+
+        // FFmpeg (for AAC codec)
+        let ffmpeg_path = libs_path.join("ffmpeg-gpl-shared/lib");
+        println!("cargo:rustc-link-search=native={}", ffmpeg_path.display());
     }
 
     #[cfg(target_os = "linux")]

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::codec::{AudioFormat, AudioEncoder, Pcm16Encoder, Pcm24Encoder, twolame};
+use crate::codec::{AudioFormat, AudioEncoder, Pcm16Encoder, Pcm20Encoder, Pcm24Encoder, twolame};
 use crate::ffi::*;
 use crate::rtp::{RtpPacketBuilder, RtpSocket, PayloadCodec};
 
@@ -66,6 +66,7 @@ impl Default for RtpOutputConfig {
     }
 }
 
+
 /// Encoder type enum for codec switching.
 #[allow(dead_code)]
 enum EncoderType {
@@ -73,6 +74,8 @@ enum EncoderType {
     None,
     /// PCM 16-bit encoder
     Pcm16(Pcm16Encoder),
+    /// PCM 20-bit encoder
+    Pcm20(Pcm20Encoder),
     /// PCM 24-bit encoder
     Pcm24(Pcm24Encoder),
     /// MP2 encoder (TwoLAME)
@@ -86,6 +89,8 @@ impl EncoderType {
             EncoderType::None => Err("No encoder initialized".to_string()),
             EncoderType::Pcm16(enc) => enc.encode(pcm, output)
                 .map_err(|e| format!("PCM16 encode error: {:?}", e)),
+            EncoderType::Pcm20(enc) => enc.encode(pcm, output)
+                .map_err(|e| format!("PCM20 encode error: {:?}", e)),
             EncoderType::Pcm24(enc) => enc.encode(pcm, output)
                 .map_err(|e| format!("PCM24 encode error: {:?}", e)),
             EncoderType::Mp2(enc) => enc.encode_float(pcm, output)
@@ -98,6 +103,7 @@ impl EncoderType {
         match self {
             EncoderType::None => 0,
             EncoderType::Pcm16(enc) => enc.total_samples_per_frame(),
+            EncoderType::Pcm20(enc) => enc.total_samples_per_frame(),
             EncoderType::Pcm24(enc) => enc.total_samples_per_frame(),
             EncoderType::Mp2(enc) => enc.total_samples_per_frame(),
         }
@@ -108,6 +114,7 @@ impl EncoderType {
         match self {
             EncoderType::None => 0,
             EncoderType::Pcm16(enc) => enc.payload_type(),
+            EncoderType::Pcm20(enc) => enc.payload_type(),
             EncoderType::Pcm24(enc) => enc.payload_type(),
             EncoderType::Mp2(_) => MP2_PAYLOAD_TYPE,
         }
@@ -176,6 +183,7 @@ impl RtpOutputStream {
         // Create encoder based on config
         let mut encoder = match config.codec {
             PayloadCodec::Pcm16 => EncoderType::Pcm16(Pcm16Encoder::new(format, config.frame_duration_ms as usize)),
+            PayloadCodec::Pcm20 => EncoderType::Pcm20(Pcm20Encoder::new(format, config.frame_duration_ms as usize)),
             PayloadCodec::Pcm24 => EncoderType::Pcm24(Pcm24Encoder::new(format, config.frame_duration_ms as usize)),
             PayloadCodec::Mp2 => {
                 match twolame::Encoder::new(format, config.bitrate) {
@@ -199,7 +207,7 @@ impl RtpOutputStream {
         let frame_duration_us = (samples_per_channel as u64 * 1_000_000) / config.sample_rate as u64;
         let frame_duration = Duration::from_micros(frame_duration_us);
 
-        // Allocate buffers - MP2 needs larger encode buffer for compressed output
+        // Allocate buffers - compressed codecs need appropriate buffer sizes
         let mut pcm_buffer = vec![0.0f32; samples_per_frame];
         let encode_buffer_size = match config.codec {
             PayloadCodec::Mp2 => 4608, // Max MP2 frame size

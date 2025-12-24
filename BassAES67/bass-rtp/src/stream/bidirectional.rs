@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::ffi::*;
 use crate::rtp::{RtpSocket, PayloadCodec};
-use crate::stream::input::{RtpInputStream, RtpInputConfig};
+use crate::stream::input::{RtpInputStream, RtpInputConfig, BufferMode};
 use crate::stream::output::{RtpOutputStream, RtpOutputConfig};
 
 /// Bidirectional RTP stream configuration.
@@ -29,8 +29,8 @@ pub struct BidirectionalConfig {
     pub output_codec: PayloadCodec,
     /// Output bitrate for compressed codecs (kbps)
     pub output_bitrate: u32,
-    /// Jitter buffer depth in milliseconds
-    pub jitter_ms: u32,
+    /// Buffer mode configuration
+    pub buffer_mode: BufferMode,
     /// Network interface to bind to (0.0.0.0 for any)
     pub interface_addr: Ipv4Addr,
 }
@@ -45,7 +45,7 @@ impl Default for BidirectionalConfig {
             channels: 2,
             output_codec: PayloadCodec::Pcm16,
             output_bitrate: 256,
-            jitter_ms: 20,
+            buffer_mode: BufferMode::Simple { buffer_ms: 100 },
             interface_addr: Ipv4Addr::new(0, 0, 0, 0),
         }
     }
@@ -69,8 +69,16 @@ pub struct BidirectionalStats {
     pub rx_underruns: u64,
     /// Transmit underruns
     pub tx_underruns: u64,
-    /// Buffer fill percentage (0-100)
+    /// Buffer fill percentage (relative to target/min, 0-100+)
     pub buffer_fill_percent: u32,
+    /// Current buffer level in milliseconds
+    pub buffer_level_ms: u32,
+    /// Target buffer in milliseconds (min in min/max mode)
+    pub target_buffer_ms: u32,
+    /// Max buffer in milliseconds (same as target in simple mode)
+    pub max_buffer_ms: u32,
+    /// True if using min/max buffer mode
+    pub is_minmax_mode: bool,
     /// Detected input payload type
     pub detected_input_pt: u8,
 }
@@ -104,7 +112,7 @@ impl BidirectionalStream {
         let input_config = RtpInputConfig {
             sample_rate: config.sample_rate,
             channels: config.channels,
-            jitter_ms: config.jitter_ms,
+            buffer_mode: config.buffer_mode,
         };
         let input = RtpInputStream::new(input_config)?;
 
@@ -200,6 +208,10 @@ impl BidirectionalStream {
             rx_underruns: input_stats.underruns.load(Ordering::Relaxed),
             tx_underruns: output_stats.map_or(0, |s| s.underruns.load(Ordering::Relaxed)),
             buffer_fill_percent: self.input.buffer_fill_percent(),
+            buffer_level_ms: self.input.buffer_level_ms(),
+            target_buffer_ms: self.input.target_buffer_ms(),
+            max_buffer_ms: self.input.max_buffer_ms(),
+            is_minmax_mode: self.input.is_minmax_mode(),
             detected_input_pt: self.input.detected_payload_type(),
         }
     }

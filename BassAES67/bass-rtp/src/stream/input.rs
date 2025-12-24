@@ -11,7 +11,10 @@ use std::thread::{self, JoinHandle};
 
 use ringbuf::{HeapRb, traits::{Producer, Consumer, Split, Observer}};
 
-use crate::codec::{AudioDecoder, Pcm16Decoder, Pcm24Decoder, mpg123};
+use crate::codec::{AudioDecoder, Pcm16Decoder, Pcm20Decoder, Pcm24Decoder, mpg123};
+use crate::codec::g711::G711UlawDecoder;
+use crate::codec::g722::G722Decoder;
+use crate::codec::ffmpeg_aac;
 use crate::ffi::*;
 use crate::rtp::{RtpPacket, RtpSocket, PayloadCodec};
 
@@ -43,6 +46,52 @@ impl Default for InputStats {
     }
 }
 
+/// Buffer mode configuration.
+#[derive(Clone, Copy, Debug)]
+pub enum BufferMode {
+    /// Simple mode: single buffer_ms value with automatic headroom
+    Simple {
+        /// Target buffer depth in milliseconds
+        buffer_ms: u32,
+    },
+    /// Min/Max mode: separate min (target) and max (ceiling) values
+    MinMax {
+        /// Minimum buffer depth in milliseconds (target - system aims for this)
+        min_ms: u32,
+        /// Maximum buffer depth in milliseconds (ceiling - speed up if exceeded)
+        max_ms: u32,
+    },
+}
+
+impl Default for BufferMode {
+    fn default() -> Self {
+        BufferMode::Simple { buffer_ms: 100 }
+    }
+}
+
+impl BufferMode {
+    /// Check if this is min/max mode.
+    pub fn is_min_max(&self) -> bool {
+        matches!(self, BufferMode::MinMax { .. })
+    }
+
+    /// Get the target buffer size in milliseconds.
+    pub fn target_ms(&self) -> u32 {
+        match self {
+            BufferMode::Simple { buffer_ms } => *buffer_ms,
+            BufferMode::MinMax { min_ms, .. } => *min_ms,
+        }
+    }
+
+    /// Get the maximum buffer size in milliseconds (for ring buffer sizing).
+    pub fn max_ms(&self) -> u32 {
+        match self {
+            BufferMode::Simple { buffer_ms } => *buffer_ms * 3, // 3x headroom
+            BufferMode::MinMax { max_ms, .. } => *max_ms * 2,   // 2x headroom
+        }
+    }
+}
+
 /// RTP input stream configuration.
 #[derive(Clone)]
 pub struct RtpInputConfig {
@@ -50,8 +99,8 @@ pub struct RtpInputConfig {
     pub sample_rate: u32,
     /// Number of channels (1 or 2)
     pub channels: u16,
-    /// Jitter buffer depth in milliseconds
-    pub jitter_ms: u32,
+    /// Buffer mode configuration
+    pub buffer_mode: BufferMode,
 }
 
 impl Default for RtpInputConfig {
@@ -59,7 +108,7 @@ impl Default for RtpInputConfig {
         Self {
             sample_rate: 48000,
             channels: 2,
-            jitter_ms: 20,
+            buffer_mode: BufferMode::default(),
         }
     }
 }
@@ -70,10 +119,18 @@ enum DecoderType {
     None,
     /// PCM 16-bit decoder
     Pcm16(Pcm16Decoder),
+    /// PCM 20-bit decoder
+    Pcm20(Pcm20Decoder),
     /// PCM 24-bit decoder
     Pcm24(Pcm24Decoder),
     /// MP2 decoder (mpg123)
     Mp2(mpg123::Decoder),
+    /// G.711 mu-law decoder
+    G711Ulaw(G711UlawDecoder),
+    /// G.722 decoder
+    G722(G722Decoder),
+    /// AAC decoder (FFmpeg)
+    Aac(ffmpeg_aac::Decoder),
 }
 
 impl DecoderType {
@@ -83,6 +140,8 @@ impl DecoderType {
             DecoderType::None => Err("No decoder initialized".to_string()),
             DecoderType::Pcm16(dec) => dec.decode(data, output)
                 .map_err(|e| format!("PCM16 decode error: {}", e)),
+            DecoderType::Pcm20(dec) => dec.decode(data, output)
+                .map_err(|e| format!("PCM20 decode error: {}", e)),
             DecoderType::Pcm24(dec) => dec.decode(data, output)
                 .map_err(|e| format!("PCM24 decode error: {}", e)),
             DecoderType::Mp2(dec) => {
@@ -133,6 +192,12 @@ impl DecoderType {
                 }
                 Ok(total_samples)
             }
+            DecoderType::G711Ulaw(dec) => dec.decode(data, output)
+                .map_err(|e| format!("G.711 decode error: {}", e)),
+            DecoderType::G722(dec) => dec.decode(data, output)
+                .map_err(|e| format!("G.722 decode error: {}", e)),
+            DecoderType::Aac(dec) => dec.decode(data, output)
+                .map_err(|e| format!("AAC decode error: {}", e)),
         }
     }
 }
@@ -155,8 +220,12 @@ pub struct RtpInputStream {
     pub config: RtpInputConfig,
     /// Statistics (lock-free)
     stats: Arc<InputStats>,
-    /// Target buffer level in samples
+    /// Target buffer level in samples (min in min/max mode)
     target_samples: usize,
+    /// Maximum buffer level in samples (for min/max mode overflow detection)
+    max_samples: usize,
+    /// Buffer mode
+    buffer_mode: BufferMode,
     /// Whether we're in initial buffering phase
     buffering: AtomicBool,
     /// Number of channels
@@ -177,11 +246,23 @@ impl RtpInputStream {
     /// Create a new RTP input stream.
     pub fn new(config: RtpInputConfig) -> Result<Self, String> {
         let channels = config.channels as usize;
+        let samples_per_ms = (config.sample_rate / 1000) as usize;
+        let buffer_mode = config.buffer_mode;
 
-        // Calculate buffer size
-        let samples_per_ms = config.sample_rate / 1000;
-        let target_samples = (config.jitter_ms * samples_per_ms) as usize * channels;
-        let buffer_size = target_samples * 3; // 3x target for headroom
+        // Calculate buffer sizes based on mode
+        let (target_samples, max_samples, buffer_size) = match buffer_mode {
+            BufferMode::Simple { buffer_ms } => {
+                let target = buffer_ms as usize * samples_per_ms * channels;
+                let max = target * 3; // 3x headroom
+                (target, max, max)
+            }
+            BufferMode::MinMax { min_ms, max_ms } => {
+                let target = min_ms as usize * samples_per_ms * channels;
+                let max = max_ms as usize * samples_per_ms * channels;
+                let size = max * 2; // 2x max for ring buffer headroom
+                (target, max, size)
+            }
+        };
 
         // Create lock-free ring buffer
         let rb = HeapRb::<f32>::new(buffer_size);
@@ -196,6 +277,8 @@ impl RtpInputStream {
             config,
             stats: Arc::new(InputStats::new()),
             target_samples,
+            max_samples,
+            buffer_mode,
             buffering: AtomicBool::new(true),
             channels,
             resample_pos: 0.0,
@@ -214,15 +297,27 @@ impl RtpInputStream {
             return Err("Stream already running".to_string());
         }
 
-        // Create new ring buffer
-        let samples_per_ms = self.config.sample_rate / 1000;
-        let target_samples = (self.config.jitter_ms * samples_per_ms) as usize * self.channels;
-        let buffer_size = target_samples * 3;
+        // Calculate buffer sizes based on mode
+        let samples_per_ms = (self.config.sample_rate / 1000) as usize;
+        let (target_samples, max_samples, buffer_size) = match self.buffer_mode {
+            BufferMode::Simple { buffer_ms } => {
+                let target = buffer_ms as usize * samples_per_ms * self.channels;
+                let max = target * 3;
+                (target, max, max)
+            }
+            BufferMode::MinMax { min_ms, max_ms } => {
+                let target = min_ms as usize * samples_per_ms * self.channels;
+                let max = max_ms as usize * samples_per_ms * self.channels;
+                let size = max * 2;
+                (target, max, size)
+            }
+        };
 
         let rb = HeapRb::<f32>::new(buffer_size);
         let (producer, consumer) = rb.split();
         self.consumer = consumer;
         self.target_samples = target_samples;
+        self.max_samples = max_samples;
 
         // Reset resampling state
         self.resample_pos = 0.0;
@@ -330,14 +425,27 @@ impl RtpInputStream {
         let available = self.consumer.occupied_len();
         let is_buffering = self.buffering.load(Ordering::Relaxed);
 
-        // Thresholds - more conservative to handle codec frame sizes
-        // MP2 frames are 1152 samples * 2 channels = 2304 samples (~24ms at 48kHz)
-        // Critical should be at least 2 frames worth to handle jitter
-        let min_critical = 4608; // ~2 MP2 frames (48ms)
-        let critical_threshold = (self.target_samples / 4).max(min_critical);  // 25% or 48ms minimum
-        let recovery_threshold = self.target_samples;   // 100% of target to exit buffering
+        // Minimum critical threshold: at least 2 MP2 frames (48ms at 48kHz stereo)
+        // MP2 frames are 1152 samples * 2 channels = 2304 samples
+        let min_critical = 4608;
 
-        // Buffering mode
+        // Calculate thresholds based on buffer mode
+        let (critical_threshold, recovery_threshold) = match self.buffer_mode {
+            BufferMode::Simple { .. } => {
+                // Simple mode: 25% of target or min_critical, whichever is larger
+                let critical = (self.target_samples / 4).max(min_critical);
+                let recovery = self.target_samples;
+                (critical, recovery)
+            }
+            BufferMode::MinMax { .. } => {
+                // Min/Max mode: 50% of min (target) or min_critical, whichever is larger
+                let critical = (self.target_samples / 2).max(min_critical);
+                let recovery = self.target_samples; // Recover to min_samples (target)
+                (critical, recovery)
+            }
+        };
+
+        // Buffering mode - output silence until reaching recovery threshold
         if is_buffering {
             if available >= recovery_threshold {
                 self.buffering.store(false, Ordering::Relaxed);
@@ -356,19 +464,44 @@ impl RtpInputStream {
         }
 
         // PI controller for adaptive resampling
+        // In min/max mode, we speed up more aggressively when above max
         let target = self.target_samples as f64;
-        let error = (available as f64 - target) / target;
+        let max = self.max_samples as f64;
 
-        const KP: f64 = 0.0001;
-        const KI: f64 = 0.00005;
-        const MAX_TRIM_PPM: f64 = 20.0;
+        // Calculate error based on buffer mode
+        let error = match self.buffer_mode {
+            BufferMode::Simple { .. } => {
+                // Simple mode: proportional error relative to target
+                (available as f64 - target) / target
+            }
+            BufferMode::MinMax { .. } => {
+                if available > self.max_samples {
+                    // Over max: stronger correction to drain back to target
+                    // Scale error by how far we are above max
+                    let overage = (available as f64 - max) / max;
+                    overage * 3.0 // 3x amplification for faster response
+                } else {
+                    // Normal: aim for target (min_samples)
+                    (available as f64 - target) / target
+                }
+            }
+        };
+
+        // PI controller gains - slightly more aggressive for min/max mode when over max
+        let (kp, ki, max_trim_ppm) = if self.buffer_mode.is_min_max() && available > self.max_samples {
+            // More aggressive when over max buffer
+            (0.0005, 0.0001, 100.0) // Allow up to 100 PPM adjustment
+        } else {
+            // Normal operation
+            (0.0001, 0.00005, 50.0) // Standard 50 PPM max
+        };
 
         self.integral_error += error;
-        let max_integral = MAX_TRIM_PPM / KI / 1e6;
+        let max_integral = max_trim_ppm / ki / 1e6;
         self.integral_error = self.integral_error.clamp(-max_integral, max_integral);
 
-        let trim = KP * error + KI * self.integral_error;
-        let trim_clamped = trim.clamp(-MAX_TRIM_PPM / 1e6, MAX_TRIM_PPM / 1e6);
+        let trim = kp * error + ki * self.integral_error;
+        let trim_clamped = trim.clamp(-max_trim_ppm / 1e6, max_trim_ppm / 1e6);
 
         // Clock feedforward (when clock is available)
         let clock_feedforward = if crate::clock_bindings::clock_is_locked() {
@@ -422,7 +555,7 @@ impl RtpInputStream {
         self.ended.load(Ordering::SeqCst) && self.consumer.occupied_len() == 0
     }
 
-    /// Get buffer fill percentage.
+    /// Get buffer fill percentage (relative to target/min buffer).
     pub fn buffer_fill_percent(&self) -> u32 {
         let level = self.consumer.occupied_len();
         if self.target_samples > 0 {
@@ -430,6 +563,35 @@ impl RtpInputStream {
         } else {
             100
         }
+    }
+
+    /// Get current buffer level in milliseconds.
+    pub fn buffer_level_ms(&self) -> u32 {
+        let level = self.consumer.occupied_len();
+        let samples_per_ms = (self.config.sample_rate / 1000) as usize * self.channels;
+        if samples_per_ms > 0 {
+            (level / samples_per_ms) as u32
+        } else {
+            0
+        }
+    }
+
+    /// Get target buffer in milliseconds (min in min/max mode).
+    pub fn target_buffer_ms(&self) -> u32 {
+        self.buffer_mode.target_ms()
+    }
+
+    /// Get max buffer in milliseconds (only meaningful in min/max mode).
+    pub fn max_buffer_ms(&self) -> u32 {
+        match self.buffer_mode {
+            BufferMode::MinMax { max_ms, .. } => max_ms,
+            BufferMode::Simple { buffer_ms } => buffer_ms, // Same as target in simple mode
+        }
+    }
+
+    /// Check if using min/max buffer mode.
+    pub fn is_minmax_mode(&self) -> bool {
+        self.buffer_mode.is_min_max()
     }
 
     /// Get statistics reference.
@@ -455,6 +617,7 @@ fn create_decoder_for_pt(pt: u8, _channels: u8) -> DecoderType {
 
     match codec {
         PayloadCodec::Pcm16 => DecoderType::Pcm16(Pcm16Decoder::new_auto(_channels)),
+        PayloadCodec::Pcm20 => DecoderType::Pcm20(Pcm20Decoder::new_auto(_channels)),
         PayloadCodec::Pcm24 => DecoderType::Pcm24(Pcm24Decoder::new_auto(_channels)),
         PayloadCodec::Mp2 => {
             match mpg123::Decoder::new() {
@@ -462,6 +625,26 @@ fn create_decoder_for_pt(pt: u8, _channels: u8) -> DecoderType {
                 Err(e) => {
                     eprintln!("Failed to create MP2 decoder: {:?}", e);
                     DecoderType::None
+                }
+            }
+        }
+        PayloadCodec::G711Ulaw => DecoderType::G711Ulaw(G711UlawDecoder::new()),
+        PayloadCodec::G722 => DecoderType::G722(G722Decoder::new()),
+        PayloadCodec::Aac => {
+            // Check if FFmpeg is available before attempting to create decoder
+            if !ffmpeg_aac::is_available() {
+                eprintln!("AAC codec not available (FFmpeg DLLs missing)");
+                DecoderType::None
+            } else {
+                match ffmpeg_aac::Decoder::new() {
+                    Ok(dec) => {
+                        eprintln!("AAC decoder created (MP2-AAC Xstream / PT 99 only)");
+                        DecoderType::Aac(dec)
+                    },
+                    Err(e) => {
+                        eprintln!("Failed to create AAC decoder: {}", e);
+                        DecoderType::None
+                    }
                 }
             }
         }

@@ -31,3 +31,7 @@ parking_lot = "0.12"
 [[example]]
 name = "rtp_loopback"
 path = "examples/rtp_loopback.rs"
+
+[[example]]
+name = "rtp_output_test"
+path = "examples/rtp_output_test.rs"

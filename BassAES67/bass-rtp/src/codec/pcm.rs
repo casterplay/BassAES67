@@ -1,6 +1,6 @@
 //! PCM codec implementations for RTP.
 //!
-//! Supports PCM 16-bit and 24-bit in big-endian (network byte order).
+//! Supports PCM 16-bit, 20-bit, and 24-bit in big-endian (network byte order).
 
 use super::{AudioDecoder, AudioEncoder, AudioFormat, CodecError};
 use crate::rtp::PayloadCodec;
@@ -113,6 +113,179 @@ impl AudioDecoder for Pcm16Decoder {
             let bytes = [data[i * 2], data[i * 2 + 1]];
             let sample_i16 = i16::from_be_bytes(bytes);
             output[i] = sample_i16 as f32 * SCALE;
+        }
+
+        Ok(sample_count)
+    }
+
+    fn frame_size(&self) -> usize {
+        self.frame_size
+    }
+
+    fn total_samples_per_frame(&self) -> usize {
+        self.frame_size * self.channels
+    }
+}
+
+// ============================================================================
+// PCM 20-bit Codec
+// ============================================================================
+
+/// PCM 20-bit encoder - converts float32 to 20-bit signed big-endian (packed in 3 bytes).
+///
+/// Format: 20-bit audio packed in 3 bytes, with the 4 LSBs of the last byte unused (zero).
+/// Used by Z/IP ONE with PT 116.
+pub struct Pcm20Encoder {
+    channels: usize,
+    frame_size: usize,
+    payload_type: u8,
+}
+
+impl Pcm20Encoder {
+    /// Create a new PCM-20 encoder.
+    pub fn new(format: AudioFormat, frame_duration_ms: usize) -> Self {
+        let frame_size = format.samples_per_channel(frame_duration_ms);
+        Self {
+            channels: format.channels as usize,
+            frame_size,
+            payload_type: PayloadCodec::Pcm20.to_pt(),
+        }
+    }
+}
+
+impl AudioEncoder for Pcm20Encoder {
+    fn encode(&mut self, pcm: &[f32], output: &mut [u8]) -> Result<usize, CodecError> {
+        let expected_samples = self.total_samples_per_frame();
+        if pcm.len() < expected_samples {
+            return Err(CodecError::InvalidInput);
+        }
+
+        // Z/IP ONE uses packed 20-bit format: 2 samples in 5 bytes (40 bits)
+        let sample_pairs = expected_samples / 2;
+        let bytes_needed = sample_pairs * 5;
+        if output.len() < bytes_needed {
+            return Err(CodecError::BufferTooSmall);
+        }
+
+        // Scale factor: 2^19 - 1 = 524287
+        const SCALE: f32 = 524287.0;
+
+        for i in 0..sample_pairs {
+            // Convert two samples to 20-bit integers
+            let s1 = (pcm[i * 2].clamp(-1.0, 1.0) * SCALE) as i32;
+            let s2 = (pcm[i * 2 + 1].clamp(-1.0, 1.0) * SCALE) as i32;
+
+            let s1_clamped = (s1.clamp(-524288, 524287) as u32) & 0xFFFFF;
+            let s2_clamped = (s2.clamp(-524288, 524287) as u32) & 0xFFFFF;
+
+            // Pack 2 samples into 5 bytes:
+            // Byte 0: S1[19:12]
+            // Byte 1: S1[11:4]
+            // Byte 2: S1[3:0] | S2[19:16]
+            // Byte 3: S2[15:8]
+            // Byte 4: S2[7:0]
+            output[i * 5] = ((s1_clamped >> 12) & 0xFF) as u8;
+            output[i * 5 + 1] = ((s1_clamped >> 4) & 0xFF) as u8;
+            output[i * 5 + 2] = (((s1_clamped & 0x0F) << 4) | ((s2_clamped >> 16) & 0x0F)) as u8;
+            output[i * 5 + 3] = ((s2_clamped >> 8) & 0xFF) as u8;
+            output[i * 5 + 4] = (s2_clamped & 0xFF) as u8;
+        }
+
+        Ok(bytes_needed)
+    }
+
+    fn frame_size(&self) -> usize {
+        self.frame_size
+    }
+
+    fn total_samples_per_frame(&self) -> usize {
+        self.frame_size * self.channels
+    }
+
+    fn payload_type(&self) -> u8 {
+        self.payload_type
+    }
+}
+
+/// PCM 20-bit decoder - converts 20-bit signed big-endian to float32.
+///
+/// Format: 20-bit audio packed in 3 bytes, with the 4 LSBs unused.
+pub struct Pcm20Decoder {
+    channels: usize,
+    frame_size: usize,
+}
+
+impl Pcm20Decoder {
+    /// Create a new PCM-20 decoder.
+    pub fn new(format: AudioFormat, frame_duration_ms: usize) -> Self {
+        let frame_size = format.samples_per_channel(frame_duration_ms);
+        Self {
+            channels: format.channels as usize,
+            frame_size,
+        }
+    }
+
+    /// Create decoder that auto-detects frame size from packet.
+    pub fn new_auto(channels: u8) -> Self {
+        Self {
+            channels: channels as usize,
+            frame_size: 0, // Will be determined by packet size
+        }
+    }
+}
+
+impl AudioDecoder for Pcm20Decoder {
+    fn decode(&mut self, data: &[u8], output: &mut [f32]) -> Result<usize, CodecError> {
+        if data.len() < 5 {
+            return Err(CodecError::InvalidInput);
+        }
+
+        // Z/IP ONE uses packed 20-bit format: 2 samples in 5 bytes (40 bits)
+        // Layout: [S1: 20 bits][S2: 20 bits] = 5 bytes
+        // Byte 0: S1[19:12]
+        // Byte 1: S1[11:4]
+        // Byte 2: S1[3:0] | S2[19:16]
+        // Byte 3: S2[15:8]
+        // Byte 4: S2[7:0]
+
+        let sample_pairs = data.len() / 5;
+        let sample_count = sample_pairs * 2;
+
+        if output.len() < sample_count {
+            return Err(CodecError::BufferTooSmall);
+        }
+
+        // Normalization: 1.0 / 2^19 (20-bit range)
+        const SCALE: f32 = 1.0 / 524288.0;
+
+        for i in 0..sample_pairs {
+            let b0 = data[i * 5] as u32;
+            let b1 = data[i * 5 + 1] as u32;
+            let b2 = data[i * 5 + 2] as u32;
+            let b3 = data[i * 5 + 3] as u32;
+            let b4 = data[i * 5 + 4] as u32;
+
+            // Sample 1: bits from b0, b1, and upper nibble of b2
+            let s1_raw = (b0 << 12) | (b1 << 4) | (b2 >> 4);
+
+            // Sample 2: lower nibble of b2, b3, b4
+            let s2_raw = ((b2 & 0x0F) << 16) | (b3 << 8) | b4;
+
+            // Sign extend from 20 bits to i32
+            let s1 = if s1_raw & 0x80000 != 0 {
+                (s1_raw | 0xFFF00000) as i32
+            } else {
+                s1_raw as i32
+            };
+
+            let s2 = if s2_raw & 0x80000 != 0 {
+                (s2_raw | 0xFFF00000) as i32
+            } else {
+                s2_raw as i32
+            };
+
+            output[i * 2] = s1 as f32 * SCALE;
+            output[i * 2 + 1] = s2 as f32 * SCALE;
         }
 
         Ok(sample_count)

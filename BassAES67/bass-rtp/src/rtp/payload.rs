@@ -21,6 +21,8 @@ pub enum PayloadCodec {
     Opus,
     /// FLAC (dynamic PT)
     Flac,
+    /// AAC (PT 99 for MP2-AAC Xstream only - PT 122 LATM not supported)
+    Aac,
     /// Unknown codec
     Unknown(u8),
 }
@@ -35,6 +37,8 @@ impl PayloadCodec {
     /// - PCM-20: PT 116
     /// - PCM-24: PT 22
     /// - MP2: PT 14 or 96
+    /// - AAC: PT 99 (MP2-AAC Xstream with ADTS format)
+    /// - PT 122 (AAC-LATM) is NOT supported - requires native LATM decoder
     pub fn from_pt(pt: u8) -> Self {
         match pt {
             0 => PayloadCodec::G711Ulaw,
@@ -42,6 +46,8 @@ impl PayloadCodec {
             14 | 96 => PayloadCodec::Mp2,
             21 => PayloadCodec::Pcm16,
             22 => PayloadCodec::Pcm24,
+            99 => PayloadCodec::Aac, // MP2-AAC Xstream (ADTS format - works)
+            // PT 122 (AAC-LATM) intentionally not mapped - requires native LATM decoder
             116 => PayloadCodec::Pcm20,
             _ => PayloadCodec::Unknown(pt),
         }
@@ -58,6 +64,7 @@ impl PayloadCodec {
             PayloadCodec::Mp2 => 14, // Could also be 96
             PayloadCodec::Opus => 111, // Common dynamic PT for OPUS
             PayloadCodec::Flac => 112, // Custom dynamic PT for FLAC
+            PayloadCodec::Aac => 99, // MP2-AAC Xstream (ADTS format)
             PayloadCodec::Unknown(pt) => *pt,
         }
     }
@@ -73,6 +80,7 @@ impl PayloadCodec {
             PayloadCodec::Mp2 => "MP2",
             PayloadCodec::Opus => "OPUS",
             PayloadCodec::Flac => "FLAC",
+            PayloadCodec::Aac => "AAC",
             PayloadCodec::Unknown(_) => "Unknown",
         }
     }
@@ -82,7 +90,8 @@ impl PayloadCodec {
         matches!(
             self,
             PayloadCodec::Pcm16 | PayloadCodec::Pcm24 | PayloadCodec::Mp2 |
-            PayloadCodec::Opus | PayloadCodec::Flac
+            PayloadCodec::Opus | PayloadCodec::Flac |
+            PayloadCodec::G711Ulaw | PayloadCodec::G722 | PayloadCodec::Aac
         )
     }
 
@@ -91,7 +100,7 @@ impl PayloadCodec {
         matches!(
             self,
             PayloadCodec::Pcm16 | PayloadCodec::Pcm24 | PayloadCodec::Mp2 |
-            PayloadCodec::Opus | PayloadCodec::Flac
+            PayloadCodec::Opus | PayloadCodec::Flac | PayloadCodec::Aac
         )
     }
 
@@ -114,6 +123,8 @@ impl PayloadCodec {
             PayloadCodec::G711Ulaw => 160,
             // G.722: 16kHz, 320 samples (20ms)
             PayloadCodec::G722 => 320,
+            // AAC: typically 1024 samples per frame
+            PayloadCodec::Aac => 1024,
             // Unknown: assume 1ms
             PayloadCodec::Unknown(_) => (sample_rate / 1000) as usize,
         }
