@@ -1,0 +1,56 @@
+
+G711 PT 0
+G722 PT 9
+PCM-16 PT 21
+PCM-20 PT 116
+PCM-24 PT 22
+MP2 PT 14/96
+MP2-AAC PT 99
+aptX PT 119
+AAC PT 122
+
+
+Manual:
+
+RTP Push Receive Port – Change the RTP receive port from the default of UDP 9150, or make blank disable. The
+three fields following this, G.722 reply at (port+1), Rcv codec reply at (port+2), and User codec reply at (port+3)
+are for configuring an automatic reply to an incoming RTP stream. For a full explanation of how these settings are
+used, see Section 9.3, Real-time Transport Protocol.
+
+
+9.3 Real-time Transport Protocol
+Regardless of whether you use TSCP or SIP to initiate your connection, the audio is sent using the Real-time
+Transport Protocol (RTP). Rather than using a connection protocol, you may send RTP streams manually.
+The features of RTP connections are:
+♦ Cross-product compatibility
+♦ Point-to-multipoint operation
+♦ Unidirectional audio transfer
+♦ Agile Connection Technology (on applicable codecs)
+There are no servers to configure for RTP. To send an RTP stream to another codec, you enter its IP address and port
+number in the format ww.xx.yy.zz:port or, if a hostname is available, hostname.tld:port. The remote codec must be
+listening on that port for a connection, and that port must be open to the public network. On the Z/IP ONE, the
+RTP listen defaults to UDP port 9150. This can be configured on the second page of the Setup->Network menu on the
+front panel, or on the Network web page.
+RTP streams push audio in one direction – from the dialing unit to the dialed unit. Because of this, it can be used in
+point-to-multipoint operation. To use this function, just issue multiple RTP connections, one after another. The
+only limit to the number of connections is your outgoing bandwidth. Using the DISC button on the front panel will
+stop all outgoing RTP streams at once.
+Although RTP streams are push-only, you can transfer audio in each direction. To do this, the operator of each
+codec must send an RTP stream to the other. If this is done, your Z/IP ONE will have all the connection features
+(including Agile Connection Technology and remote quality information) as if the transfer was started via TSCP
+or SIP. However, since the call is not handled by a connection manager, each end must still stop its own stream
+individually.
+In some scenarios, this process can be automated. The Z/IP ONE has what we call ‘reciprocal RTP.’ If you send an
+RTP stream to one of the Z/IP ONE’s reciprocal RTP ports, it will respond to the ‘caller’ with its own stream. This
+sets up a bidirectional connection, just like using TSCP or SIP, but there is no NAT traversal. The called party must
+have a port or ports forwarded in order for reciprocal RTP to work.
+In addition to the listen-only RTP port, there are three reciprocal RTP ports. These are the next three port numbers
+above the listen port, and are disabled by default (e.g. if the RTP listen port is 9150, the available reciprocal RTP
+ports are 9151, 9152, and 9153). Each of these ports has a different behavior, and can be enabled individually if
+needed:
+Port Default Effect
+Base 9150 Receive Only
+Base + 1 9151 Reply with G.722
+Base + 2 9152 Reply with same as received codec
+Base + 3 9153 Reply with current codec setting
+Setting the RTP base port to 0 will disable the RTP receive-only port as well as all reciprocal RTP ports.

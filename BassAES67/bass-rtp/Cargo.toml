@@ -1,0 +1,33 @@
+[package]
+name = "bass-rtp"
+version = "0.1.0"
+edition = "2021"
+description = "Bidirectional RTP audio plugin for BASS with Telos Z/IP ONE codec support"
+license = "MIT"
+
+[lib]
+# cdylib = shared library (.dll on Windows, .so on Linux)
+# rlib = rust library for examples to link against
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+socket2 = { version = "0.5", features = ["all"] }
+ringbuf = "0.4"
+parking_lot = "0.12"
+lazy_static = "1.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+ringbuf = "0.4"
+parking_lot = "0.12"
+
+[build-dependencies]
+
+[[example]]
+name = "rtp_loopback"
+path = "examples/rtp_loopback.rs"

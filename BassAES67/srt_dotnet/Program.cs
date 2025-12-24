@@ -164,10 +164,10 @@ BassSrtNative.ConnectionStateCallback connectionCallback = (state, user) =>
         // Schedule reconnection attempt
         //ScheduleReconnect(3000);
     }
-    else if (state == BassSrtNative.CONNECTION_STATE_CONNECTED)
-    {
-        Console.WriteLine("[SRT] Connected to sender.");
-    }
+        else if (state == BassSrtNative.CONNECTION_STATE_CONNECTED)
+        {
+            Console.WriteLine("[SRT] Connected to sender.");
+        }
 };
 BassSrtNative.BASS_SRT_SetConnectionStateCallback(connectionCallback, IntPtr.Zero);
 
