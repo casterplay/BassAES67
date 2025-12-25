@@ -83,6 +83,8 @@ pub struct RtpOutputConfig {
     pub ptp_domain: u8,
     /// Incoming audio buffer mode
     pub buffer_mode: BufferMode,
+    /// Create incoming stream with BASS_STREAM_DECODE flag (for mixer compatibility)
+    pub decode_stream: bool,
     /// Connection state callback (optional)
     pub connection_callback: Option<ConnectionCallback>,
     /// User data for callback
@@ -102,6 +104,7 @@ impl Default for RtpOutputConfig {
             clock_mode: ClockMode::System,
             ptp_domain: 0,
             buffer_mode: BufferMode::Simple { buffer_ms: 100 },
+            decode_stream: false,
             connection_callback: None,
             callback_user_data: std::ptr::null_mut(),
         }

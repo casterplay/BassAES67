@@ -97,6 +97,8 @@ pub struct RtpInputConfig {
     pub ptp_domain: u8,
     /// Return audio buffer mode
     pub return_buffer_mode: BufferMode,
+    /// Create return stream with BASS_STREAM_DECODE flag (for mixer compatibility)
+    pub decode_stream: bool,
 }
 
 impl Default for RtpInputConfig {
@@ -114,6 +116,7 @@ impl Default for RtpInputConfig {
             clock_mode: ClockMode::System,
             ptp_domain: 0,
             return_buffer_mode: BufferMode::Simple { buffer_ms: 100 },
+            decode_stream: false,
         }
     }
 }

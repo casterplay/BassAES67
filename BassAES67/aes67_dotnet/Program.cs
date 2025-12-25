@@ -10,7 +10,7 @@ string outputMulticast = args.Length > 3 ? args[3] : "239.192.1.100";
 
 // Initialize BASS
 var audioEngine = new AudioEngine();
-audioEngine.InitBass(0);  // device=0 for no-soundcard mode
+audioEngine.InitBass(-1);  // device=0 for no-soundcard mode
 
 int mixer = BassMix.BASS_Mixer_StreamCreate(48000, 2, BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_SOFTWARE | BASSFlag.BASS_MIXER_NONSTOP);
 Console.WriteLine($"mixer: {mixer}");

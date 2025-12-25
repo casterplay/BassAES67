@@ -79,6 +79,9 @@ public static class BassRtpNative
         /// <summary>Incoming audio max buffer in milliseconds (min/max mode only)</summary>
         public uint MaxBufferMs;
 
+        /// <summary>Create incoming stream with BASS_STREAM_DECODE flag (for mixer compatibility)</summary>
+        public byte DecodeStream;
+
         /// <summary>Connection state callback (optional, can be IntPtr.Zero)</summary>
         public IntPtr ConnectionCallback;
 
@@ -119,6 +122,7 @@ public static class BassRtpNative
                 BufferMode = BASS_RTP_BUFFER_MODE_SIMPLE,
                 BufferMs = 200,
                 MaxBufferMs = 500,
+                DecodeStream = 0,
                 ConnectionCallback = IntPtr.Zero,
                 CallbackUserData = IntPtr.Zero
             };

@@ -128,6 +128,8 @@ pub struct RtpInputConfigFFI {
     pub return_buffer_ms: u32,
     /// Return audio max buffer in milliseconds (min/max mode only)
     pub return_max_buffer_ms: u32,
+    /// Create return stream with BASS_STREAM_DECODE flag (for mixer compatibility)
+    pub decode_stream: u8,
 }
 
 /// Statistics for RTP Input stream
@@ -213,6 +215,7 @@ fn convert_input_ffi_config(config: &RtpInputConfigFFI) -> RtpInputConfig {
         clock_mode,
         ptp_domain: config.ptp_domain,
         return_buffer_mode,
+        decode_stream: config.decode_stream != 0,
     }
 }
 
@@ -263,10 +266,17 @@ pub unsafe extern "system" fn BASS_RTP_InputStart(handle: *mut c_void) -> i32 {
     let stream = &mut *(handle as *mut RtpInput);
 
     // Create BASS stream for return audio (what we receive from Z/IP ONE)
+    // Use BASS_STREAM_DECODE if decode_stream is set (for mixer compatibility)
+    let flags = if stream.config.decode_stream {
+        BASS_SAMPLE_FLOAT | BASS_STREAM_DECODE
+    } else {
+        BASS_SAMPLE_FLOAT
+    };
+
     let bass_stream = BASS_StreamCreate(
         48000,
         stream.config.channels as u32,
-        BASS_SAMPLE_FLOAT,
+        flags,
         Some(input_return_stream_proc),
         stream as *mut _ as *mut c_void,
     );
@@ -444,6 +454,8 @@ pub struct RtpOutputConfigFFI {
     pub buffer_ms: u32,
     /// Incoming audio max buffer in milliseconds (min/max mode only)
     pub max_buffer_ms: u32,
+    /// Create incoming stream with BASS_STREAM_DECODE flag (for mixer compatibility)
+    pub decode_stream: u8,
     /// Connection state callback (optional, can be null)
     pub connection_callback: Option<output::ConnectionCallback>,
     /// User data for callback
@@ -526,6 +538,7 @@ fn convert_output_ffi_config(config: &RtpOutputConfigFFI) -> RtpOutputConfig {
         clock_mode,
         ptp_domain: config.ptp_domain,
         buffer_mode,
+        decode_stream: config.decode_stream != 0,
         connection_callback: config.connection_callback,
         callback_user_data: config.callback_user_data,
     }
@@ -578,10 +591,17 @@ pub unsafe extern "system" fn BASS_RTP_OutputStart(handle: *mut c_void) -> i32 {
     let stream = &mut *(handle as *mut RtpOutput);
 
     // Create BASS stream for incoming audio (what we receive from Z/IP ONE)
+    // Use BASS_STREAM_DECODE if decode_stream is set (for mixer compatibility)
+    let flags = if stream.config.decode_stream {
+        BASS_SAMPLE_FLOAT | BASS_STREAM_DECODE
+    } else {
+        BASS_SAMPLE_FLOAT
+    };
+
     let bass_stream = BASS_StreamCreate(
         48000,
         stream.config.channels as u32,
-        BASS_SAMPLE_FLOAT,
+        flags,
         Some(output_incoming_stream_proc),
         stream as *mut _ as *mut c_void,
     );
