@@ -171,3 +171,19 @@ extern "system" {
     pub fn BASS_ChannelLock(handle: DWORD, lock: BOOL) -> BOOL;
     pub fn BASS_ChannelGetData(handle: DWORD, buffer: *mut c_void, length: DWORD) -> DWORD;
 }
+
+/// Thread-local last error code (used when BASS functions not available)
+use std::cell::Cell;
+thread_local! {
+    static LAST_ERROR: Cell<i32> = const { Cell::new(BASS_OK) };
+}
+
+/// Set the last error code
+pub fn set_error(error: i32) {
+    LAST_ERROR.with(|e| e.set(error));
+}
+
+/// Get the last error code
+pub fn get_error() -> i32 {
+    LAST_ERROR.with(|e| e.get())
+}

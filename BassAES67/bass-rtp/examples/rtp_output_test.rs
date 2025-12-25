@@ -1,27 +1,21 @@
-//! RTP Output Test for BASS RTP Plugin
+//! RTP Output Test for BASS RTP Module
 //!
-//! This example tests the output module of bass-rtp where WE connect TO Z/IP ONE.
-//! Unlike rtp_loopback which waits for incoming connections, this example
-//! actively connects to a specified Z/IP ONE and sends audio while receiving return audio.
+//! This example tests the OUTPUT module of bass-rtp where Z/IP ONE connects TO us.
+//! - We LISTEN on a port for incoming connections
+//! - We RECEIVE audio FROM Z/IP ONE (incoming)
+//! - We SEND backfeed audio TO Z/IP ONE
+//!
+//! The remote address is auto-detected from the first incoming RTP packet.
 //!
 //! Usage:
-//!   # Connect to Z/IP ONE port 9152 (returns same codec as sent)
-//!   cargo run --release --example rtp_output_test -- 192.168.50.155 9152
+//!   # Listen on port 5004 for Z/IP ONE to connect
+//!   cargo run --release --example rtp_output_test -- 5004
 //!
-//!   # Connect with specific send codec (0=PCM16, 1=PCM20, 2=PCM24, 3=MP2, 4=G.711, 5=G.722)
-//!   cargo run --release --example rtp_output_test -- 192.168.50.155 9152 --codec 3
-//!
-//!   # With custom local port
-//!   cargo run --release --example rtp_output_test -- 192.168.50.155 9152 --local-port 5006
+//!   # Listen with specific backfeed codec (0=PCM16, 1=PCM20, 2=PCM24, 3=MP2, 4=G.711, 5=G.722)
+//!   cargo run --release --example rtp_output_test -- 5004 --backfeed-codec 3
 //!
 //!   # With buffer settings
-//!   cargo run --release --example rtp_output_test -- 192.168.50.155 9152 --buffer 100
-//!
-//! Z/IP ONE Reciprocal Ports:
-//!   9150 = Receive only (no reply from Z/IP ONE)
-//!   9151 = Reply with G.722
-//!   9152 = Reply with same codec as sent
-//!   9153 = Reply with current codec setting (often MP2)
+//!   cargo run --release --example rtp_output_test -- 5004 --buffer 100
 //!
 //! On Windows, ensure bass.dll and bass_rtp.dll are in the PATH or current directory.
 
@@ -40,7 +34,6 @@ use std::time::Duration;
 type DWORD = u32;
 type BOOL = i32;
 type HSTREAM = DWORD;
-type HPLUGIN = DWORD;
 
 #[allow(dead_code)]
 const TRUE: BOOL = 1;
@@ -68,8 +61,6 @@ extern "system" {
     fn BASS_Free() -> BOOL;
     fn BASS_GetVersion() -> DWORD;
     fn BASS_ErrorGetCode() -> i32;
-    fn BASS_PluginLoad(file: *const i8, flags: DWORD) -> HPLUGIN;
-    fn BASS_PluginFree(handle: HPLUGIN) -> BOOL;
     fn BASS_StreamCreate(
         freq: DWORD,
         chans: DWORD,
@@ -89,57 +80,62 @@ extern "system" {
 type StreamProc = unsafe extern "system" fn(HSTREAM, *mut c_void, DWORD, *mut c_void) -> DWORD;
 
 // ============================================================================
-// RTP Output Plugin FFI Types (loaded dynamically)
+// RTP Output FFI Types (loaded dynamically)
 // ============================================================================
 
 /// Buffer mode constants
 const BASS_RTP_BUFFER_MODE_SIMPLE: u8 = 0;
 const BASS_RTP_BUFFER_MODE_MINMAX: u8 = 1;
 
-/// Configuration for creating an RTP output stream
+/// Connection state for callback
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionState {
+    Disconnected = 0,
+    Connected = 1,
+}
+
+/// Connection callback type
+type ConnectionCallback = extern "C" fn(state: ConnectionState, user_data: *mut c_void);
+
+/// Configuration for creating an RTP Output stream (Z/IP ONE connects TO us)
 #[repr(C)]
 struct RtpOutputConfigFFI {
-    /// Remote IP address (Z/IP ONE) as 4 bytes
-    remote_addr: [u8; 4],
-    /// Remote port (9150-9153 for Z/IP ONE, or custom)
-    remote_port: u16,
-    /// Local port to bind (0 = auto-assign)
+    /// Local port to listen on (Z/IP ONE connects here)
     local_port: u16,
-    /// Network interface IP address (4 bytes, 0.0.0.0 = default)
+    /// Network interface IP address (4 bytes, 0.0.0.0 = any)
     interface_addr: [u8; 4],
     /// Sample rate (48000)
     sample_rate: u32,
     /// Number of channels (1 or 2)
     channels: u16,
-    /// Send codec (BASS_RTP_CODEC_*)
-    send_codec: u8,
-    /// Send bitrate in kbps (for MP2/OPUS, 0 = default)
-    send_bitrate: u32,
-    /// Frame duration in milliseconds
+    /// Backfeed codec (BASS_RTP_CODEC_*)
+    backfeed_codec: u8,
+    /// Backfeed bitrate in kbps (for MP2, 0 = default)
+    backfeed_bitrate: u32,
+    /// Frame duration in milliseconds (1-5, 0 = default 1)
     frame_duration_ms: u32,
     /// Clock mode (0=PTP, 1=Livewire, 2=System)
     clock_mode: u8,
-    /// Return audio buffer mode (0=simple, 1=min/max)
-    return_buffer_mode: u8,
-    /// Return audio buffer size in ms (simple mode target, minmax mode min)
-    return_buffer_ms: u32,
-    /// Return audio max buffer size in ms (minmax mode only)
-    return_max_buffer_ms: u32,
+    /// PTP domain (0-127)
+    ptp_domain: u8,
+    /// Incoming audio buffer mode (0=simple, 1=min/max)
+    buffer_mode: u8,
+    /// Incoming audio buffer size in ms (simple mode target, minmax mode min)
+    buffer_ms: u32,
+    /// Incoming audio max buffer size in ms (minmax mode only)
+    max_buffer_ms: u32,
+    /// Connection state callback (optional)
+    connection_callback: Option<ConnectionCallback>,
+    /// User data for callback
+    callback_user_data: *mut c_void,
 }
 
-/// Statistics for an RTP output stream
+/// Statistics for an RTP Output stream
 #[repr(C)]
 #[derive(Debug, Default)]
 struct RtpOutputStatsFFI {
-    /// TX packets sent
-    tx_packets: u64,
-    /// TX bytes sent
-    tx_bytes: u64,
-    /// TX encode errors
-    tx_encode_errors: u64,
-    /// TX buffer underruns
-    tx_underruns: u64,
-    /// RX packets received (return audio)
+    /// RX packets received (incoming audio)
     rx_packets: u64,
     /// RX bytes received
     rx_bytes: u64,
@@ -147,10 +143,18 @@ struct RtpOutputStatsFFI {
     rx_decode_errors: u64,
     /// RX packets dropped (buffer full)
     rx_dropped: u64,
-    /// Current return buffer level (samples)
+    /// TX packets sent (backfeed)
+    tx_packets: u64,
+    /// TX bytes sent
+    tx_bytes: u64,
+    /// TX encode errors
+    tx_encode_errors: u64,
+    /// TX buffer underruns
+    tx_underruns: u64,
+    /// Current incoming buffer level (samples)
     buffer_level: u32,
-    /// Detected return audio payload type
-    detected_return_pt: u8,
+    /// Detected incoming audio payload type
+    detected_incoming_pt: u8,
     /// Current PPM adjustment * 1000
     current_ppm_x1000: i32,
 }
@@ -170,10 +174,10 @@ const CLOCK_MODE_SYSTEM: u8 = 2;
 
 // Function pointer types for dynamically loaded functions
 type FnBassRtpOutputCreate =
-    unsafe extern "system" fn(source_channel: DWORD, config: *const RtpOutputConfigFFI) -> *mut c_void;
+    unsafe extern "system" fn(backfeed_channel: DWORD, config: *const RtpOutputConfigFFI) -> *mut c_void;
 type FnBassRtpOutputStart = unsafe extern "system" fn(handle: *mut c_void) -> i32;
 type FnBassRtpOutputStop = unsafe extern "system" fn(handle: *mut c_void) -> i32;
-type FnBassRtpOutputGetReturnStream = unsafe extern "system" fn(handle: *mut c_void) -> HSTREAM;
+type FnBassRtpOutputGetInputStream = unsafe extern "system" fn(handle: *mut c_void) -> HSTREAM;
 type FnBassRtpOutputGetStats =
     unsafe extern "system" fn(handle: *mut c_void, stats: *mut RtpOutputStatsFFI) -> i32;
 #[allow(dead_code)]
@@ -185,7 +189,7 @@ struct RtpOutputFunctions {
     create: FnBassRtpOutputCreate,
     start: FnBassRtpOutputStart,
     stop: FnBassRtpOutputStop,
-    get_return_stream: FnBassRtpOutputGetReturnStream,
+    get_input_stream: FnBassRtpOutputGetInputStream,
     get_stats: FnBassRtpOutputGetStats,
     free: FnBassRtpOutputFree,
 }
@@ -304,7 +308,7 @@ impl RtpOutputFunctions {
                 create: lib.get_fn("BASS_RTP_OutputCreate")?,
                 start: lib.get_fn("BASS_RTP_OutputStart")?,
                 stop: lib.get_fn("BASS_RTP_OutputStop")?,
-                get_return_stream: lib.get_fn("BASS_RTP_OutputGetReturnStream")?,
+                get_input_stream: lib.get_fn("BASS_RTP_OutputGetInputStream")?,
                 get_stats: lib.get_fn("BASS_RTP_OutputGetStats")?,
                 free: lib.get_fn("BASS_RTP_OutputFree")?,
             })
@@ -313,7 +317,7 @@ impl RtpOutputFunctions {
 }
 
 // ============================================================================
-// Tone Generator
+// Tone Generator (for backfeed)
 // ============================================================================
 
 /// State for generating a sine wave test tone
@@ -349,7 +353,22 @@ impl ToneGenerator {
 // Global tone generator for the BASS callback
 static mut TONE_GEN: Option<ToneGenerator> = None;
 
-/// BASS stream callback that generates a 440Hz sine wave
+// Global connection state
+static CONNECTION_STATE: AtomicBool = AtomicBool::new(false);
+
+/// Connection state callback - called when connection is established or lost
+extern "C" fn on_connection_state_change(state: ConnectionState, _user_data: *mut c_void) {
+    let connected = state == ConnectionState::Connected;
+    CONNECTION_STATE.store(connected, Ordering::SeqCst);
+
+    if connected {
+        println!("\n>>> CONNECTED - Receiving RTP stream");
+    } else {
+        println!("\n>>> DISCONNECTED - RTP stream lost");
+    }
+}
+
+/// BASS stream callback that generates a 440Hz sine wave for backfeed
 unsafe extern "system" fn tone_stream_proc(
     _handle: HSTREAM,
     buffer: *mut c_void,
@@ -406,43 +425,26 @@ fn payload_type_name(pt: u8) -> &'static str {
     }
 }
 
-fn parse_ip(s: &str) -> Option<[u8; 4]> {
-    let parts: Vec<&str> = s.split('.').collect();
-    if parts.len() != 4 {
-        return None;
-    }
-    Some([
-        parts[0].parse().ok()?,
-        parts[1].parse().ok()?,
-        parts[2].parse().ok()?,
-        parts[3].parse().ok()?,
-    ])
-}
-
 fn print_usage() {
     println!("BASS RTP Output Test");
     println!("====================\n");
-    println!("Usage: rtp_output_test <remote_ip> <remote_port> [options]\n");
+    println!("Usage: rtp_output_test <local_port> [options]\n");
+    println!("Mode: OUTPUT - Z/IP ONE connects TO us\n");
+    println!("       Remote address is auto-detected from first incoming packet.\n");
     println!("Required arguments:");
-    println!("  remote_ip   - Z/IP ONE IP address");
-    println!("  remote_port - Z/IP ONE port");
-    println!("                  9150 = Receive only (no reply)");
-    println!("                  9151 = Reply with G.722");
-    println!("                  9152 = Reply with same codec as sent");
-    println!("                  9153 = Reply with current codec setting\n");
+    println!("  local_port - Port to listen on (Z/IP ONE connects here)\n");
     println!("Options:");
-    println!("  --codec <n>        Send codec: 0=PCM16, 1=PCM20, 2=PCM24, 3=MP2, 4=G.711, 5=G.722");
-    println!("  --bitrate <kbps>   Bitrate for MP2 (default: 384)");
-    println!("  --local-port <n>   Local port to bind (default: 0 = auto)");
-    println!("  --clock <mode>     Clock mode: ptp, livewire, system (default: system)");
-    println!("  --buffer <ms>      Return audio buffer size (default: 100ms)");
-    println!("  --min-buffer <ms>  Min/Max mode: minimum buffer (target)");
-    println!("  --max-buffer <ms>  Min/Max mode: maximum buffer (ceiling)");
+    println!("  --backfeed-codec <n>  Backfeed codec: 0=PCM16, 1=PCM20, 2=PCM24, 3=MP2, 4=G.711, 5=G.722");
+    println!("  --bitrate <kbps>      Bitrate for MP2 (default: 256)");
+    println!("  --clock <mode>        Clock mode: ptp, livewire, system (default: system)");
+    println!("  --buffer <ms>         Incoming audio buffer size (default: 100ms)");
+    println!("  --min-buffer <ms>     Min/Max mode: minimum buffer (target)");
+    println!("  --max-buffer <ms>     Min/Max mode: maximum buffer (ceiling)");
     println!();
     println!("Examples:");
-    println!("  rtp_output_test 192.168.50.155 9152");
-    println!("  rtp_output_test 192.168.50.155 9152 --codec 3 --bitrate 384");
-    println!("  rtp_output_test 192.168.50.155 9151 --codec 5  # G.722 to G.722");
+    println!("  rtp_output_test 5004");
+    println!("  rtp_output_test 5004 --backfeed-codec 3 --bitrate 384");
+    println!("  rtp_output_test 5004 --buffer 150");
 }
 
 // ============================================================================
@@ -454,58 +456,41 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     // Show help if requested or not enough arguments
-    if args.len() < 3 || args.iter().any(|a| a == "-h" || a == "--help") {
+    if args.len() < 2 || args.iter().any(|a| a == "-h" || a == "--help") {
         print_usage();
         return;
     }
 
     // Parse required arguments
-    let remote_ip_str = &args[1];
-    let remote_ip = match parse_ip(remote_ip_str) {
-        Some(ip) => ip,
-        None => {
-            println!("ERROR: Invalid IP address: {}", remote_ip_str);
-            print_usage();
-            return;
-        }
-    };
-
-    let remote_port: u16 = match args[2].parse() {
+    let local_port: u16 = match args[1].parse() {
         Ok(p) => p,
         Err(_) => {
-            println!("ERROR: Invalid port: {}", args[2]);
+            println!("ERROR: Invalid port: {}", args[1]);
             print_usage();
             return;
         }
     };
 
     // Parse optional arguments
-    let mut send_codec: u8 = BASS_RTP_CODEC_PCM16;
-    let mut send_bitrate: u32 = 384;
-    let mut local_port: u16 = 0;
+    let mut backfeed_codec: u8 = BASS_RTP_CODEC_PCM16;
+    let mut backfeed_bitrate: u32 = 256;
     let mut clock_mode: u8 = CLOCK_MODE_SYSTEM;
     let mut buffer_ms: u32 = 100;
     let mut min_buffer_ms: u32 = 0;
     let mut max_buffer_ms: u32 = 0;
 
-    let mut i = 3;
+    let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
-            "--codec" => {
+            "--backfeed-codec" => {
                 if i + 1 < args.len() {
-                    send_codec = args[i + 1].parse().unwrap_or(0);
+                    backfeed_codec = args[i + 1].parse().unwrap_or(0);
                     i += 1;
                 }
             }
             "--bitrate" => {
                 if i + 1 < args.len() {
-                    send_bitrate = args[i + 1].parse().unwrap_or(384);
-                    i += 1;
-                }
-            }
-            "--local-port" => {
-                if i + 1 < args.len() {
-                    local_port = args[i + 1].parse().unwrap_or(0);
+                    backfeed_bitrate = args[i + 1].parse().unwrap_or(256);
                     i += 1;
                 }
             }
@@ -553,25 +538,17 @@ fn main() {
     println!("BASS RTP Output Test");
     println!("====================\n");
 
-    println!("Mode: OUTPUT (WE connect to Z/IP ONE)");
-    println!("      Port {} = {}", remote_port, match remote_port {
-        9150 => "Receive only (no reply)",
-        9151 => "Reply with G.722",
-        9152 => "Reply with same codec",
-        9153 => "Reply with current codec (often MP2)",
-        _ => "Custom port",
-    });
+    println!("Mode: OUTPUT (Z/IP ONE connects TO us)");
+    println!("      Remote address will be auto-detected from first incoming packet.");
 
     println!();
-    println!("Remote:      {}.{}.{}.{}:{}",
-        remote_ip[0], remote_ip[1], remote_ip[2], remote_ip[3], remote_port);
-    println!("Local port:  {}", if local_port == 0 { "auto".to_string() } else { local_port.to_string() });
-    println!("Send codec:  {} ({}kbps)", codec_name(send_codec), send_bitrate);
-    println!("Clock mode:  {}", clock_mode_name(clock_mode));
+    println!("Listen port:    {}", local_port);
+    println!("Backfeed codec: {} ({}kbps)", codec_name(backfeed_codec), backfeed_bitrate);
+    println!("Clock mode:     {}", clock_mode_name(clock_mode));
     if use_minmax_mode {
-        println!("Ret buffer:  Min/Max mode (min: {}ms, max: {}ms)", effective_min, effective_max);
+        println!("Buffer:         Min/Max mode (min: {}ms, max: {}ms)", effective_min, effective_max);
     } else {
-        println!("Ret buffer:  Simple mode ({}ms)", effective_min);
+        println!("Buffer:         Simple mode ({}ms)", effective_min);
     }
     println!();
 
@@ -604,11 +581,11 @@ fn main() {
         }
         println!("BASS initialized successfully");
 
-        // Load the RTP plugin via BASS (registers the plugin)
-        println!("\nLoading RTP plugin...");
+        // Load the RTP library
+        println!("\nLoading RTP library...");
 
         #[cfg(windows)]
-        let plugin_paths = [
+        let lib_paths = [
             "bass_rtp.dll",
             "./bass_rtp.dll",
             "./target/release/bass_rtp.dll",
@@ -616,39 +593,19 @@ fn main() {
         ];
 
         #[cfg(not(windows))]
-        let plugin_paths = [
+        let lib_paths = [
             "libbass_rtp.so",
             "./libbass_rtp.so",
             "./target/release/libbass_rtp.so",
             "../target/release/libbass_rtp.so",
         ];
 
-        let mut plugin: HPLUGIN = 0;
-        for path in &plugin_paths {
-            let plugin_path = CString::new(*path).unwrap();
-            plugin = BASS_PluginLoad(plugin_path.as_ptr(), 0);
-            if plugin != 0 {
-                println!("Plugin loaded from: {}", path);
-                break;
-            }
-        }
-
-        if plugin == 0 {
-            println!(
-                "ERROR: Failed to load plugin (error code: {})",
-                BASS_ErrorGetCode()
-            );
-            println!("Tried paths: {:?}", plugin_paths);
-            BASS_Free();
-            return;
-        }
-
         // Load RTP Output function pointers
-        let rtp_lib = match Library::load(&plugin_paths) {
+        let rtp_lib = match Library::load(&lib_paths) {
             Some(lib) => lib,
             None => {
                 println!("ERROR: Failed to load bass_rtp library");
-                BASS_PluginFree(plugin);
+                println!("Tried paths: {:?}", lib_paths);
                 BASS_Free();
                 return;
             }
@@ -658,14 +615,13 @@ fn main() {
             Some(f) => f,
             None => {
                 println!("ERROR: Failed to load RTP Output functions");
-                BASS_PluginFree(plugin);
                 BASS_Free();
                 return;
             }
         };
 
-        // Create tone generator stream (440Hz sine wave)
-        println!("\nCreating 440Hz tone generator...");
+        // Create tone generator stream (440Hz sine wave) for backfeed
+        println!("\nCreating 440Hz tone generator for backfeed...");
         TONE_GEN = Some(ToneGenerator::new(440.0, 48000.0, 0.5));
 
         let tone_stream = BASS_StreamCreate(
@@ -681,91 +637,89 @@ fn main() {
                 "ERROR: Failed to create tone stream (error code: {})",
                 BASS_ErrorGetCode()
             );
-            BASS_PluginFree(plugin);
             BASS_Free();
             return;
         }
         println!("Tone generator created");
 
-        // Configure RTP output stream
+        // Configure RTP Output stream
         let config = RtpOutputConfigFFI {
-            remote_addr: remote_ip,
-            remote_port,
             local_port,
             interface_addr: [0, 0, 0, 0], // default interface
             sample_rate: 48000,
             channels: 2,
-            send_codec,
-            send_bitrate,
+            backfeed_codec,
+            backfeed_bitrate,
             frame_duration_ms: 1, // 1ms frames
             clock_mode,
-            return_buffer_mode: buffer_mode,
-            return_buffer_ms: effective_min,
-            return_max_buffer_ms: effective_max,
+            ptp_domain: 0,
+            buffer_mode,
+            buffer_ms: effective_min,
+            max_buffer_ms: effective_max,
+            connection_callback: Some(on_connection_state_change),
+            callback_user_data: ptr::null_mut(),
         };
 
-        println!("\nCreating RTP output stream...");
+        println!("\nCreating RTP Output stream...");
         let rtp_handle = (rtp.create)(tone_stream, &config);
         if rtp_handle.is_null() {
             println!(
-                "ERROR: Failed to create RTP output stream (error code: {})",
+                "ERROR: Failed to create RTP Output stream (error code: {})",
                 BASS_ErrorGetCode()
             );
             BASS_StreamFree(tone_stream);
-            BASS_PluginFree(plugin);
             BASS_Free();
             return;
         }
-        println!("RTP output stream created");
+        println!("RTP Output stream created");
 
-        // Start the RTP output stream
-        println!("Starting RTP output stream...");
+        // Start the RTP Output stream
+        println!("Starting RTP Output stream...");
         if (rtp.start)(rtp_handle) == 0 {
             println!(
-                "ERROR: Failed to start RTP output stream (error code: {})",
+                "ERROR: Failed to start RTP Output stream (error code: {})",
                 BASS_ErrorGetCode()
             );
             (rtp.free)(rtp_handle);
             BASS_StreamFree(tone_stream);
-            BASS_PluginFree(plugin);
             BASS_Free();
             return;
         }
-        println!("RTP output stream started - sending to Z/IP ONE");
+        println!("RTP Output stream started - listening for connections");
 
-        // Get the return stream handle and start playback
-        let return_stream = (rtp.get_return_stream)(rtp_handle);
-        if return_stream == 0 {
-            println!("Return stream not available yet (will receive when data arrives)");
+        // Get the incoming stream handle and start playback
+        let input_stream = (rtp.get_input_stream)(rtp_handle);
+        if input_stream == 0 {
+            println!("Incoming stream not available yet (will receive when data arrives)");
         } else {
-            println!("Return stream ready (handle: {})", return_stream);
+            println!("Incoming stream ready (handle: {})", input_stream);
 
-            if BASS_ChannelPlay(return_stream, FALSE) == FALSE {
+            if BASS_ChannelPlay(input_stream, FALSE) == FALSE {
                 println!(
-                    "WARNING: Failed to start return audio playback (error code: {})",
+                    "WARNING: Failed to start incoming audio playback (error code: {})",
                     BASS_ErrorGetCode()
                 );
             } else {
-                println!("Return audio playback started");
+                println!("Incoming audio playback started");
             }
         }
 
         println!("\n--- Running (Ctrl+C to stop) ---\n");
-        println!("Sending 440Hz tone to Z/IP ONE...\n");
+        println!("Waiting for Z/IP ONE to connect on port {}...\n", local_port);
 
         // Monitor loop
         let start_time = std::time::Instant::now();
         let mut stats = RtpOutputStatsFFI::default();
-        let mut last_tx = 0u64;
         let mut last_rx = 0u64;
+        let mut last_tx = 0u64;
 
         while running.load(Ordering::SeqCst) {
             // Get statistics
             (rtp.get_stats)(rtp_handle, &mut stats);
 
-            // Get return stream level if available
-            let (left_level, right_level) = if return_stream != 0 {
-                let level = BASS_ChannelGetLevel(return_stream);
+            // Get input stream level if available
+            let (left_level, right_level) = if input_stream != 0 {
+                let level = BASS_ChannelGetLevel(input_stream);
                 let left = (level & 0xFFFF) as f32 / 32768.0 * 100.0;
                 let right = ((level >> 16) & 0xFFFF) as f32 / 32768.0 * 100.0;
                 (left, right)
@@ -774,8 +728,8 @@ fn main() {
             };
 
             // Get channel state
-            let state = if return_stream != 0 {
-                BASS_ChannelIsActive(return_stream)
+            let state = if input_stream != 0 {
+                BASS_ChannelIsActive(input_stream)
             } else {
                 BASS_ACTIVE_STOPPED
             };
@@ -803,29 +757,33 @@ fn main() {
                 "|".repeat(right_bars) + &" ".repeat(meter_width - right_bars);
 
             // Calculate packets per second
-            let tx_pps = (stats.tx_packets - last_tx) * 2; // 500ms intervals
-            let rx_pps = (stats.rx_packets - last_rx) * 2;
-            last_tx = stats.tx_packets;
+            let rx_pps = (stats.rx_packets - last_rx) * 2; // 500ms intervals
+            let tx_pps = (stats.tx_packets - last_tx) * 2;
             last_rx = stats.rx_packets;
+            last_tx = stats.tx_packets;
 
             // PPM display
             let ppm = stats.current_ppm_x1000 as f32 / 1000.0;
 
+            // Connection state
+            let conn_str = if CONNECTION_STATE.load(Ordering::SeqCst) { "CONN" } else { "----" };
+
             // Print status line
             print!(
-                "\r\x1b[K[{:02}:{:02}] {} TX:{:6}({:4}pps) RX:{:6}({:3}pps) Buf:{:5} Drop:{} [{}][{}] Ret:{} PPM:{:+.1}",
+                "\r\x1b[K[{:02}:{:02}] {} {} RX:{:6}({:3}pps) TX:{:6}({:4}pps) Buf:{:5} Drop:{} [{}][{}] In:{} PPM:{:+.1}",
                 mins,
                 secs,
+                conn_str,
                 state_str,
-                stats.tx_packets,
-                tx_pps,
                 stats.rx_packets,
                 rx_pps,
+                stats.tx_packets,
+                tx_pps,
                 stats.buffer_level,
                 stats.rx_dropped,
                 left_meter,
                 right_meter,
-                payload_type_name(stats.detected_return_pt),
+                payload_type_name(stats.detected_incoming_pt),
                 ppm,
             );
             std::io::stdout().flush().unwrap();
@@ -838,7 +796,6 @@ fn main() {
         (rtp.stop)(rtp_handle);
         (rtp.free)(rtp_handle);
         BASS_StreamFree(tone_stream);
-        BASS_PluginFree(plugin);
         BASS_Free();
         println!("Done!");
     }

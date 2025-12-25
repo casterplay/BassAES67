@@ -42,6 +42,7 @@ This document outlines development principles for building features systematical
 - For databse EF, keep "QueryTrackingBehavior.NoTracking". Create new database querys if needed for add and update. Never use Tracking or "AsTracking"
 - Do not use GUID or a string of GUID as unique identifier in database classes, use: "[Key] public int Id { get; set; }"
 - Never use "object" in C#!
+- Never use "unsafe" code in C#
 
 ### Rust Project Guidelines
 - Never use MUTEX in an audio application!

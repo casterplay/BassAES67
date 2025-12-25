@@ -138,6 +138,13 @@ impl RtpSocket {
         }
     }
 
+    /// Receive data from any source with source address.
+    ///
+    /// Returns the number of bytes received and the source address.
+    pub fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.socket.recv_from(buf)
+    }
+
     /// Receive data with source address filtering.
     ///
     /// Only accepts packets from the configured remote address.

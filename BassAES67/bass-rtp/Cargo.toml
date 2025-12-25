@@ -29,8 +29,8 @@ parking_lot = "0.12"
 [build-dependencies]
 
 [[example]]
-name = "rtp_loopback"
-path = "examples/rtp_loopback.rs"
+name = "rtp_input_test"
+path = "examples/rtp_input_test.rs"
 
 [[example]]
 name = "rtp_output_test"

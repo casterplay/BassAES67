@@ -1,0 +1,96 @@
+====================================================
+Starting ZipOne first, then "rtp_output_test"
+====================================================
+
+--- Running (Ctrl+C to stop) ---
+
+Waiting for Z/IP ONE to connect on port 6004...
+
+[00:00] ---- Play RX:     0(  0pps) TX:     0(   0pps) Buf:    0 Drop:0 [          ][          ] In:G.711u PPM:+0.0
+>>> CONNECTED - Receiving RTP stream
+[DEBUG] Generation changed: 0 -> 1, buffer: 1152, target: 9600
+[DEBUG] Buffering complete: available=20160, threshold=14400
+[00:07] CONN Play RX:  1153(166pps) TX:  6996(1000pps) Buf: 2684 Drop:0 [||        ][||        ] In:PCM16 PPM:+0.0
+
+Stopping...
+Done!
+
+-- MP2 --
+
+
+--- Running (Ctrl+C to stop) ---
+
+Waiting for Z/IP ONE to connect on port 6004...
+
+[00:00] ---- Play RX:     0(  0pps) TX:     0(   0pps) Buf:    0 Drop:0 [          ][          ] In:G.711u PPM:+0.0
+>>> CONNECTED - Receiving RTP stream
+[DEBUG] Generation changed: 0 -> 1, buffer: 6912, target: 9600
+[DEBUG] Buffering complete: available=18432, threshold=14400
+[00:16] CONN Play RX:   687( 42pps) TX: 16497(1002pps) Buf: 4772 Drop:0 [||        ][||        ] In:MP2 PPM:+0.0
+
+Stopping...
+Done!
+
+
+
+
+
+====================================================
+Starting "rtp_output_test" first, then ZipOne
+====================================================
+
+--- Running (Ctrl+C to stop) ---
+
+Waiting for Z/IP ONE to connect on port 6004...
+
+[00:04] ---- Play RX:     0(  0pps) TX:     0(   0pps) Buf:    0 Drop:0 [          ][          ] In:G.711u PPM:+0.0
+>>> CONNECTED - Receiving RTP stream
+[DEBUG] Generation changed: 0 -> 1, buffer: 4032, target: 9600
+[DEBUG] Buffering complete: available=23616, threshold=14400
+[00:13] CONN Play RX:  1042(  0pps) TX:  8761(1002pps) Buf:14556 Drop:0 [          ][          ] In:PCM16 PPM:+0.0
+>>> DISCONNECTED - RTP stream lost
+[00:14] ---- Play RX:  1042(  0pps) TX:  9245(   0pps) Buf:14556 Drop:0 [          ][          ] In:PCM16 PPM:+0.0
+>>> CONNECTED - Receiving RTP stream
+[DEBUG] Generation changed: 1 -> 2, buffer: 5760, target: 9600
+[00:14] CONN Play RX:  1055( 26pps) TX:  9321( 152pps) Buf: 7488 Drop:0 [          ][          ] In:PCM16 PPM:+0.0[DEBUG] Buffering complete: available=15552, threshold=14400
+[00:22] CONN Play RX:  2307(166pps) TX: 16827(1000pps) Buf: 8618 Drop:0 [|         ][|         ] In:PCM16 PPM:+0.0
+
+Stopping...
+Done!
+
+
+-- MP2 ---
+
+--- Running (Ctrl+C to stop) ---
+
+Waiting for Z/IP ONE to connect on port 6004...
+
+[00:03] ---- Play RX:     0(  0pps) TX:     0(   0pps) Buf:    0 Drop:0 [          ][          ] In:G.711u PPM:+0.0
+>>> CONNECTED - Receiving RTP stream
+[DEBUG] Generation changed: 0 -> 1, buffer: 0, target: 9600
+[DEBUG] Buffering complete: available=18432, threshold=14400
+[00:07] CONN Play RX:   133( 42pps) TX:  3288(1000pps) Buf:11128 Drop:0 [||        ][||        ] In:MP2 PPM:+0.0
+Warning: Big change (MPEG version, layer, rate). Frankenstein stream?
+[src/libmpg123/layer1.c:I_step_two():144] error: 409 bits needed, 393 available
+[src/libmpg123/layer1.c:INT123_do_layer1():237] error: Aborting layer I decoding after step two.
+Note: Illegal Audio-MPEG-Header 0xdafbd36b at offset 158304.
+Note: Trying to resync...
+Note: Hit end of (available) data during resync.
+Note: Illegal Audio-MPEG-Header 0xdafbd36b at offset 158304.
+Note: Trying to resync...
+Note: Hit end of (available) data during resync.
+Note: Illegal Audio-MPEG-Header 0xdafbd36b at offset 158304.
+Note: Trying to resync...
+Note: Skipped 668 bytes in input.
+[00:19] CONN Play RX:   509(  0pps) TX: 15300(1000pps) Buf:12130 Drop:0 [          ][          ] In:MP2 PPM:+0.0
+>>> DISCONNECTED - RTP stream lost
+[00:20] ---- Play RX:   509(  0pps) TX: 15301(   0pps) Buf:12130 Drop:0 [          ][          ] In:MP2 PPM:+0.0
+>>> CONNECTED - Receiving RTP stream
+[DEBUG] Generation changed: 1 -> 2, buffer: 6912, target: 9600
+[DEBUG] Buffering complete: available=16128, threshold=14400
+[00:32] CONN Play RX:   905(  0pps) TX: 27789(1000pps) Buf:12252 Drop:0 [          ][          ] In:MP2 PPM:+0.0
+>>> DISCONNECTED - RTP stream lost
+[00:38] ---- Play RX:   905(  0pps) TX: 27797(   0pps) Buf:12252 Drop:0 [          ][          ] In:MP2 PPM:+0.0
+
+Stopping...
+Done!
