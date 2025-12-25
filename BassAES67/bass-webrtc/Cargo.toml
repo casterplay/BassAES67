@@ -1,0 +1,48 @@
+[package]
+name = "bass-webrtc"
+version = "0.1.0"
+edition = "2021"
+description = "WebRTC audio streaming plugin for BASS with WHIP/WHEP support"
+license = "MIT"
+
+[lib]
+# cdylib = shared library (.dll on Windows, .so on Linux)
+# rlib = rust library for examples to link against
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# WebRTC - pure Rust implementation
+webrtc = "0.11"
+
+# Async runtime (required by webrtc-rs)
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+# Lock-free ring buffer (same as bass-srt/bass-aes67)
+ringbuf = "0.4"
+
+# HTTP server for WHIP/WHEP
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+
+# Bytes handling (used by webrtc-rs)
+bytes = "1"
+
+# Fast mutex (non-audio path only)
+parking_lot = "0.12"
+
+# Lazy initialization
+lazy_static = "1.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+[[example]]
+name = "webrtc_test"
+path = "examples/webrtc_test.rs"
