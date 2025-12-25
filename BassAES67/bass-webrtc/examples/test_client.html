@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BASS WebRTC Test Client - MediaMTX</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { color: #333; margin-bottom: 5px; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h2 { margin-top: 0; color: #444; font-size: 1.2em; }
+        .form-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            align-items: center;
+        }
+        .form-row label { min-width: 100px; color: #555; }
+        .form-row input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .btn-group { display: flex; gap: 10px; margin-top: 15px; }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: #0066cc; color: white; }
+        .btn-primary:hover:not(:disabled) { background: #0052a3; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover:not(:disabled) { background: #b02a37; }
+        .status {
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .status-disconnected { background: #f8d7da; color: #721c24; }
+        .status-connecting { background: #fff3cd; color: #856404; }
+        .status-connected { background: #d4edda; color: #155724; }
+        .meter-container { margin-top: 15px; }
+        .meter-label { font-size: 13px; color: #666; margin-bottom: 5px; }
+        .meter {
+            height: 24px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .meter-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #20c997);
+            width: 0%;
+            transition: width 0.1s;
+        }
+        .log-container {
+            background: #1e1e1e;
+            border-radius: 4px;
+            padding: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .log-entry { color: #d4d4d4; }
+        .log-entry.error { color: #f48771; }
+        .log-entry.success { color: #89d185; }
+        .log-entry .time { color: #6a9955; }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <h1>BASS WebRTC Test Client</h1>
+    <p class="subtitle">Connect to MediaMTX via WHIP/WHEP</p>
+
+    <div class="card">
+        <h2>MediaMTX Server Settings</h2>
+        <div class="form-row">
+            <label>Server URL:</label>
+            <input type="text" id="serverUrl" value="http://localhost:8889" placeholder="http://localhost:8889">
+        </div>
+        <div class="form-row">
+            <label>Stream Name:</label>
+            <input type="text" id="streamName" value="mystream" placeholder="mystream">
+        </div>
+    </div>
+
+    <div class="two-col">
+        <!-- WHIP: Send audio to server -->
+        <div class="card">
+            <h2>Send Audio (WHIP)</h2>
+            <p style="color: #666; font-size: 13px;">Send microphone audio to MediaMTX. bass-webrtc can receive via WHEP.</p>
+            <div class="btn-group">
+                <button id="whipConnectBtn" class="btn-primary" onclick="whipConnect()">Connect & Send</button>
+                <button id="whipDisconnectBtn" class="btn-danger" onclick="whipDisconnect()" disabled>Disconnect</button>
+            </div>
+            <div id="whipStatus" class="status status-disconnected">Disconnected</div>
+            <div class="meter-container">
+                <div class="meter-label">Microphone Level</div>
+                <div class="meter"><div id="whipMeter" class="meter-fill"></div></div>
+            </div>
+        </div>
+
+        <!-- WHEP: Receive audio from server -->
+        <div class="card">
+            <h2>Receive Audio (WHEP)</h2>
+            <p style="color: #666; font-size: 13px;">Receive audio from MediaMTX. bass-webrtc can send via WHIP.</p>
+            <div class="btn-group">
+                <button id="whepConnectBtn" class="btn-primary" onclick="whepConnect()">Connect & Play</button>
+                <button id="whepDisconnectBtn" class="btn-danger" onclick="whepDisconnect()" disabled>Disconnect</button>
+            </div>
+            <div id="whepStatus" class="status status-disconnected">Disconnected</div>
+            <div class="meter-container">
+                <div class="meter-label">Playback Level</div>
+                <div class="meter"><div id="whepMeter" class="meter-fill"></div></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Log</h2>
+        <div id="log" class="log-container"></div>
+    </div>
+
+    <script>
+        // State
+        let whipPc = null;
+        let whipStream = null;
+        let whipResourceUrl = null;
+        let whipAnalyser = null;
+
+        let whepPc = null;
+        let whepResourceUrl = null;
+        let whepAnalyser = null;
+        let audioContext = null;
+
+        function log(msg, type = '') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry ' + type;
+            entry.innerHTML = `<span class="time">[${time}]</span> ${msg}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function setStatus(elementId, text, state) {
+            const el = document.getElementById(elementId);
+            el.textContent = text;
+            el.className = 'status status-' + state;
+        }
+
+        function getWhipUrl() {
+            const server = document.getElementById('serverUrl').value.replace(/\/$/, '');
+            const stream = document.getElementById('streamName').value;
+            return `${server}/${stream}/whip`;
+        }
+
+        function getWhepUrl() {
+            const server = document.getElementById('serverUrl').value.replace(/\/$/, '');
+            const stream = document.getElementById('streamName').value;
+            return `${server}/${stream}/whep`;
+        }
+
+        // WHIP: Send audio
+        async function whipConnect() {
+            try {
+                setStatus('whipStatus', 'Connecting...', 'connecting');
+                log('WHIP: Requesting microphone access...');
+
+                // Get microphone
+                whipStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 },
+                    video: false
+                });
+                log('WHIP: Microphone access granted', 'success');
+
+                // Setup audio analyser
+                if (!audioContext) audioContext = new AudioContext({ sampleRate: 48000 });
+                const source = audioContext.createMediaStreamSource(whipStream);
+                whipAnalyser = audioContext.createAnalyser();
+                whipAnalyser.fftSize = 256;
+                source.connect(whipAnalyser);
+
+                // Create peer connection
+                whipPc = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+
+                // Add audio track
+                whipStream.getAudioTracks().forEach(track => {
+                    whipPc.addTrack(track, whipStream);
+                });
+
+                // Connection state
+                whipPc.onconnectionstatechange = () => {
+                    log(`WHIP: Connection state: ${whipPc.connectionState}`);
+                    if (whipPc.connectionState === 'connected') {
+                        setStatus('whipStatus', 'Connected - Sending audio', 'connected');
+                    } else if (whipPc.connectionState === 'failed') {
+                        setStatus('whipStatus', 'Connection failed', 'disconnected');
+                    }
+                };
+
+                // Create and send offer
+                const offer = await whipPc.createOffer();
+                await whipPc.setLocalDescription(offer);
+                await waitForIce(whipPc);
+
+                const whipUrl = getWhipUrl();
+                log(`WHIP: Connecting to ${whipUrl}`);
+
+                const response = await fetch(whipUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/sdp' },
+                    body: whipPc.localDescription.sdp
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}`);
+                }
+
+                whipResourceUrl = response.headers.get('Location');
+                const answerSdp = await response.text();
+                await whipPc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+                log('WHIP: Connected and streaming', 'success');
+                document.getElementById('whipConnectBtn').disabled = true;
+                document.getElementById('whipDisconnectBtn').disabled = false;
+
+                updateMeters();
+
+            } catch (err) {
+                log(`WHIP Error: ${err.message}`, 'error');
+                setStatus('whipStatus', 'Error: ' + err.message, 'disconnected');
+                whipDisconnect();
+            }
+        }
+
+        async function whipDisconnect() {
+            log('WHIP: Disconnecting...');
+
+            if (whipResourceUrl) {
+                try {
+                    await fetch(whipResourceUrl, { method: 'DELETE' });
+                } catch (e) {}
+                whipResourceUrl = null;
+            }
+
+            if (whipPc) {
+                whipPc.close();
+                whipPc = null;
+            }
+
+            if (whipStream) {
+                whipStream.getTracks().forEach(t => t.stop());
+                whipStream = null;
+            }
+
+            whipAnalyser = null;
+            setStatus('whipStatus', 'Disconnected', 'disconnected');
+            document.getElementById('whipConnectBtn').disabled = false;
+            document.getElementById('whipDisconnectBtn').disabled = true;
+            document.getElementById('whipMeter').style.width = '0%';
+        }
+
+        // WHEP: Receive audio
+        async function whepConnect() {
+            try {
+                setStatus('whepStatus', 'Connecting...', 'connecting');
+
+                if (!audioContext) audioContext = new AudioContext({ sampleRate: 48000 });
+
+                // Create peer connection
+                whepPc = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+
+                // Handle incoming track
+                whepPc.ontrack = (event) => {
+                    log('WHEP: Received audio track', 'success');
+                    const audio = new Audio();
+                    audio.srcObject = event.streams[0];
+                    audio.play();
+
+                    // Setup analyser for received audio
+                    const source = audioContext.createMediaStreamSource(event.streams[0]);
+                    whepAnalyser = audioContext.createAnalyser();
+                    whepAnalyser.fftSize = 256;
+                    source.connect(whepAnalyser);
+                };
+
+                // Connection state
+                whepPc.onconnectionstatechange = () => {
+                    log(`WHEP: Connection state: ${whepPc.connectionState}`);
+                    if (whepPc.connectionState === 'connected') {
+                        setStatus('whepStatus', 'Connected - Playing audio', 'connected');
+                    } else if (whepPc.connectionState === 'failed') {
+                        setStatus('whepStatus', 'Connection failed', 'disconnected');
+                    }
+                };
+
+                // Add receive-only transceiver
+                whepPc.addTransceiver('audio', { direction: 'recvonly' });
+
+                // Create and send offer
+                const offer = await whepPc.createOffer();
+                await whepPc.setLocalDescription(offer);
+                await waitForIce(whepPc);
+
+                const whepUrl = getWhepUrl();
+                log(`WHEP: Connecting to ${whepUrl}`);
+
+                const response = await fetch(whepUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/sdp' },
+                    body: whepPc.localDescription.sdp
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}`);
+                }
+
+                whepResourceUrl = response.headers.get('Location');
+                const answerSdp = await response.text();
+                await whepPc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+                log('WHEP: Connected', 'success');
+                document.getElementById('whepConnectBtn').disabled = true;
+                document.getElementById('whepDisconnectBtn').disabled = false;
+
+                updateMeters();
+
+            } catch (err) {
+                log(`WHEP Error: ${err.message}`, 'error');
+                setStatus('whepStatus', 'Error: ' + err.message, 'disconnected');
+                whepDisconnect();
+            }
+        }
+
+        async function whepDisconnect() {
+            log('WHEP: Disconnecting...');
+
+            if (whepResourceUrl) {
+                try {
+                    await fetch(whepResourceUrl, { method: 'DELETE' });
+                } catch (e) {}
+                whepResourceUrl = null;
+            }
+
+            if (whepPc) {
+                whepPc.close();
+                whepPc = null;
+            }
+
+            whepAnalyser = null;
+            setStatus('whepStatus', 'Disconnected', 'disconnected');
+            document.getElementById('whepConnectBtn').disabled = false;
+            document.getElementById('whepDisconnectBtn').disabled = true;
+            document.getElementById('whepMeter').style.width = '0%';
+        }
+
+        // Utilities
+        function waitForIce(pc) {
+            return new Promise(resolve => {
+                if (pc.iceGatheringState === 'complete') {
+                    resolve();
+                } else {
+                    const check = () => {
+                        if (pc.iceGatheringState === 'complete') {
+                            pc.removeEventListener('icegatheringstatechange', check);
+                            resolve();
+                        }
+                    };
+                    pc.addEventListener('icegatheringstatechange', check);
+                    setTimeout(resolve, 3000); // Timeout fallback
+                }
+            });
+        }
+
+        function updateMeters() {
+            if (whipAnalyser) {
+                const data = new Uint8Array(whipAnalyser.frequencyBinCount);
+                whipAnalyser.getByteFrequencyData(data);
+                const avg = data.reduce((a, b) => a + b, 0) / data.length;
+                document.getElementById('whipMeter').style.width = Math.min(100, avg) + '%';
+            }
+
+            if (whepAnalyser) {
+                const data = new Uint8Array(whepAnalyser.frequencyBinCount);
+                whepAnalyser.getByteFrequencyData(data);
+                const avg = data.reduce((a, b) => a + b, 0) / data.length;
+                document.getElementById('whepMeter').style.width = Math.min(100, avg) + '%';
+            }
+
+            if (whipAnalyser || whepAnalyser) {
+                requestAnimationFrame(updateMeters);
+            }
+        }
+
+        // Initialize
+        log('Ready. Configure server settings and click Connect.');
+    </script>
+</body>
+</html>

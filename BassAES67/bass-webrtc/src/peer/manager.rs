@@ -71,6 +71,10 @@ pub struct PeerManager {
     active_count: AtomicU32,
     /// Incoming audio buffer size per peer (samples)
     incoming_buffer_size: usize,
+    /// Sample rate for OPUS decoder
+    sample_rate: u32,
+    /// Number of channels for OPUS decoder
+    channels: u16,
 }
 
 impl PeerManager {
@@ -79,7 +83,14 @@ impl PeerManager {
     /// # Arguments
     /// * `ice_servers` - List of ICE (STUN/TURN) servers
     /// * `incoming_buffer_size` - Size of incoming audio ring buffer per peer (in samples)
-    pub fn new(ice_servers: Vec<IceServerConfig>, incoming_buffer_size: usize) -> Result<Self, String> {
+    /// * `sample_rate` - Sample rate for OPUS decoder (48000)
+    /// * `channels` - Number of channels (1 or 2)
+    pub fn new(
+        ice_servers: Vec<IceServerConfig>,
+        incoming_buffer_size: usize,
+        sample_rate: u32,
+        channels: u16,
+    ) -> Result<Self, String> {
         // Create media engine and register OPUS codec
         let mut media_engine = MediaEngine::default();
         media_engine
@@ -117,6 +128,8 @@ impl PeerManager {
             peers: Default::default(),
             active_count: AtomicU32::new(0),
             incoming_buffer_size,
+            sample_rate,
+            channels,
         })
     }
 
@@ -167,6 +180,8 @@ impl PeerManager {
             config,
             self.shared_track.clone(),
             self.incoming_buffer_size,
+            self.sample_rate,
+            self.channels,
         )
         .await?;
 
@@ -196,6 +211,8 @@ impl PeerManager {
             config,
             self.shared_track.clone(),
             self.incoming_buffer_size,
+            self.sample_rate,
+            self.channels,
         )
         .await?;
 

@@ -146,7 +146,12 @@ impl WebRtcServer {
             * config.channels as usize
             * 3; // 3x headroom
 
-        let peer_manager = PeerManager::new(ice_servers, incoming_buffer_samples)?;
+        let peer_manager = PeerManager::new(
+            ice_servers,
+            incoming_buffer_samples,
+            config.sample_rate,
+            config.channels,
+        )?;
 
         Ok(Self {
             peer_manager: Arc::new(Mutex::new(peer_manager)),
@@ -163,10 +168,29 @@ impl WebRtcServer {
     }
 
     /// Add an ICE server
-    fn add_ice_server(&mut self, url: &str, username: Option<&str>, credential: Option<&str>) {
+    fn add_ice_server(&mut self, _url: &str, _username: Option<&str>, _credential: Option<&str>) {
         // Note: This would require reinitializing peer manager
         // For now, ICE servers should be configured before creating the server
         // This is a limitation we can address later
+    }
+
+    /// Wire a peer's incoming audio consumer to the input stream
+    fn wire_peer_consumer(&mut self, peer_id: u32) {
+        if let Some(ref mut input) = self.input_stream {
+            let mut pm = self.peer_manager.lock();
+            if let Some(peer) = pm.get_peer_mut(peer_id) {
+                if let Some(consumer) = peer.take_incoming_consumer() {
+                    input.set_peer_consumer(peer_id, consumer);
+                }
+            }
+        }
+    }
+
+    /// Remove a peer's consumer from input stream
+    fn unwire_peer_consumer(&mut self, peer_id: u32) {
+        if let Some(ref mut input) = self.input_stream {
+            input.remove_peer_consumer(peer_id);
+        }
     }
 
     /// Set signaling callbacks
@@ -530,7 +554,7 @@ pub unsafe extern "system" fn BASS_WEBRTC_AddPeer(
         return -1;
     }
 
-    let server = &*(handle as *const WebRtcServer);
+    let server = &mut *(handle as *mut WebRtcServer);
     let offer = CStr::from_ptr(offer_sdp).to_string_lossy();
 
     let result = RUNTIME.block_on(async {
@@ -540,6 +564,9 @@ pub unsafe extern "system" fn BASS_WEBRTC_AddPeer(
 
     match result {
         Ok((peer_id, answer)) => {
+            // Wire the peer's incoming audio consumer to the input stream
+            server.wire_peer_consumer(peer_id);
+
             let answer_bytes = answer.as_bytes();
             let len = answer_bytes.len().min(4095);
             std::ptr::copy_nonoverlapping(answer_bytes.as_ptr(), answer_sdp as *mut u8, len);
@@ -607,7 +634,10 @@ pub unsafe extern "system" fn BASS_WEBRTC_RemovePeer(handle: *mut c_void, peer_i
         return 0;
     }
 
-    let server = &*(handle as *const WebRtcServer);
+    let server = &mut *(handle as *mut WebRtcServer);
+
+    // Unwire the peer's consumer from input stream
+    server.unwire_peer_consumer(peer_id);
 
     let result = RUNTIME.block_on(async {
         let mut pm = server.peer_manager.lock();
@@ -726,5 +756,313 @@ pub unsafe extern "system" fn BASS_WEBRTC_Free(handle: *mut c_void) -> i32 {
     }
 
     let _ = Box::from_raw(handle as *mut WebRtcServer);
+    1
+}
+
+// ============================================================================
+// WHIP/WHEP Client API (for connecting to external servers like MediaMTX)
+// ============================================================================
+
+/// Signaling mode: WHIP client (push to external server)
+pub const BASS_WEBRTC_SIGNALING_WHIP_CLIENT: u8 = 3;
+/// Signaling mode: WHEP client (pull from external server)
+pub const BASS_WEBRTC_SIGNALING_WHEP_CLIENT: u8 = 4;
+
+/// Connect to a WHIP server and push audio.
+///
+/// Creates a WebRTC connection to an external WHIP server (like MediaMTX)
+/// and sends audio from the BASS source channel to it.
+///
+/// # Arguments
+/// * `source_channel` - BASS channel to read audio from
+/// * `whip_url` - WHIP endpoint URL (e.g., "http://localhost:8889/mystream/whip")
+/// * `sample_rate` - Sample rate (48000 recommended)
+/// * `channels` - Number of channels (1 or 2)
+/// * `opus_bitrate` - OPUS bitrate in kbps
+///
+/// # Returns
+/// Handle on success, null on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_ConnectWhip(
+    source_channel: DWORD,
+    whip_url: *const c_char,
+    sample_rate: u32,
+    channels: u16,
+    opus_bitrate: u32,
+) -> *mut c_void {
+    if whip_url.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return std::ptr::null_mut();
+    }
+
+    let url = CStr::from_ptr(whip_url).to_string_lossy().to_string();
+    let ice_servers = ice::google_stun_servers();
+
+    let result = RUNTIME.block_on(async {
+        signaling::WhipClient::connect(&url, &ice_servers, sample_rate, channels).await
+    });
+
+    match result {
+        Ok(client) => {
+            // Wrap client with source channel info for audio streaming
+            let wrapper = WhipClientWrapper {
+                client,
+                source_channel,
+                sample_rate,
+                channels,
+                opus_bitrate,
+                output_stream: None,
+            };
+            Box::into_raw(Box::new(wrapper)) as *mut c_void
+        }
+        Err(e) => {
+            eprintln!("BASS_WEBRTC_ConnectWhip error: {}", e);
+            set_error(BASS_ERROR_CREATE);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Wrapper for WHIP client with audio output functionality
+struct WhipClientWrapper {
+    client: signaling::WhipClient,
+    source_channel: DWORD,
+    sample_rate: u32,
+    channels: u16,
+    opus_bitrate: u32,
+    output_stream: Option<WebRtcOutputStream>,
+}
+
+/// Start streaming audio to the connected WHIP server.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_ConnectWhip
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_WhipStart(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let wrapper = &mut *(handle as *mut WhipClientWrapper);
+
+    // Create and start output stream
+    let mut output = WebRtcOutputStream::new(
+        wrapper.source_channel,
+        wrapper.client.audio_track().clone(),
+        wrapper.sample_rate,
+        wrapper.channels,
+        wrapper.opus_bitrate,
+        RUNTIME.handle().clone(),
+    );
+
+    match output.start() {
+        Ok(()) => {
+            wrapper.output_stream = Some(output);
+            1
+        }
+        Err(e) => {
+            eprintln!("BASS_WEBRTC_WhipStart error: {}", e);
+            set_error(BASS_ERROR_START);
+            0
+        }
+    }
+}
+
+/// Stop streaming and disconnect from the WHIP server.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_ConnectWhip
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_WhipStop(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let wrapper = &mut *(handle as *mut WhipClientWrapper);
+
+    // Stop output stream
+    if let Some(ref mut output) = wrapper.output_stream {
+        output.stop();
+    }
+    wrapper.output_stream = None;
+
+    // Disconnect from server
+    let _ = RUNTIME.block_on(wrapper.client.disconnect());
+
+    1
+}
+
+/// Free WHIP client resources.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_ConnectWhip
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_WhipFree(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let _ = Box::from_raw(handle as *mut WhipClientWrapper);
+    1
+}
+
+/// Connect to a WHEP server and receive audio.
+///
+/// Creates a WebRTC connection to an external WHEP server (like MediaMTX)
+/// and receives audio into a BASS stream.
+///
+/// # Arguments
+/// * `whep_url` - WHEP endpoint URL (e.g., "http://localhost:8889/mystream/whep")
+/// * `sample_rate` - Sample rate (48000 recommended)
+/// * `channels` - Number of channels (1 or 2)
+/// * `buffer_ms` - Buffer size in milliseconds
+/// * `decode_stream` - Set to 1 for BASS_STREAM_DECODE flag (mixer compatibility)
+///
+/// # Returns
+/// Handle on success, null on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_ConnectWhep(
+    whep_url: *const c_char,
+    sample_rate: u32,
+    channels: u16,
+    buffer_ms: u32,
+    decode_stream: u8,
+) -> *mut c_void {
+    if whep_url.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return std::ptr::null_mut();
+    }
+
+    let url = CStr::from_ptr(whep_url).to_string_lossy().to_string();
+    let ice_servers = ice::google_stun_servers();
+    let buffer_samples = (sample_rate as usize / 1000) * buffer_ms as usize * channels as usize * 3;
+
+    let result = RUNTIME.block_on(async {
+        signaling::WhepClient::connect(&url, &ice_servers, sample_rate, channels, buffer_samples).await
+    });
+
+    match result {
+        Ok(mut client) => {
+            // Take the incoming consumer and create input stream
+            let consumer = client.take_incoming_consumer();
+
+            // Create wrapper with input stream
+            let mut wrapper = WhepClientWrapper {
+                client,
+                sample_rate,
+                channels,
+                buffer_ms,
+                input_stream: None,
+                input_handle: 0,
+            };
+
+            // Create input stream
+            let mut input = Box::new(WebRtcInputStream::new(sample_rate, channels, buffer_ms));
+
+            // Wire the consumer
+            if let Some(c) = consumer {
+                input.set_peer_consumer(0, c);
+            }
+
+            // Create BASS stream
+            let flags = if decode_stream != 0 {
+                BASS_SAMPLE_FLOAT | BASS_STREAM_DECODE
+            } else {
+                BASS_SAMPLE_FLOAT
+            };
+
+            let input_ptr = input.as_mut() as *mut WebRtcInputStream;
+            let bass_stream = BASS_StreamCreate(
+                sample_rate,
+                channels as u32,
+                flags,
+                Some(input_stream_proc),
+                input_ptr as *mut c_void,
+            );
+
+            if bass_stream == 0 {
+                eprintln!("BASS_WEBRTC_ConnectWhep: Failed to create BASS stream");
+                set_error(BASS_ERROR_CREATE);
+                return std::ptr::null_mut();
+            }
+
+            wrapper.input_stream = Some(input);
+            wrapper.input_handle = bass_stream;
+
+            Box::into_raw(Box::new(wrapper)) as *mut c_void
+        }
+        Err(e) => {
+            eprintln!("BASS_WEBRTC_ConnectWhep error: {}", e);
+            set_error(BASS_ERROR_CREATE);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Wrapper for WHEP client with audio input functionality
+struct WhepClientWrapper {
+    client: signaling::WhepClient,
+    sample_rate: u32,
+    channels: u16,
+    buffer_ms: u32,
+    input_stream: Option<Box<WebRtcInputStream>>,
+    input_handle: HSTREAM,
+}
+
+/// Get the BASS input stream from a WHEP connection.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_ConnectWhep
+///
+/// # Returns
+/// BASS stream handle, or 0 if not available
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_WhepGetStream(handle: *mut c_void) -> HSTREAM {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let wrapper = &*(handle as *const WhepClientWrapper);
+    wrapper.input_handle
+}
+
+/// Disconnect from the WHEP server and free resources.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_ConnectWhep
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_WhepFree(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let mut wrapper = Box::from_raw(handle as *mut WhepClientWrapper);
+
+    // Free BASS stream
+    if wrapper.input_handle != 0 {
+        BASS_StreamFree(wrapper.input_handle);
+    }
+
+    // Disconnect from server
+    let _ = RUNTIME.block_on(wrapper.client.disconnect());
+
+    // Input stream is dropped when wrapper is dropped
     1
 }
