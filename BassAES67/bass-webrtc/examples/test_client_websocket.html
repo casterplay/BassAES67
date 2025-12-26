@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BASS WebRTC - WebSocket Signaling</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { color: #333; margin-bottom: 5px; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h2 { margin-top: 0; color: #444; font-size: 1.2em; }
+        .form-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .form-row label { min-width: 120px; color: #555; }
+        .form-row input, .form-row select {
+            flex: 1;
+            min-width: 150px;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .checkbox-row {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+        .checkbox-row label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+        }
+        .btn-group { display: flex; gap: 10px; margin-top: 15px; }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: #0066cc; color: white; }
+        .btn-primary:hover:not(:disabled) { background: #0052a3; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover:not(:disabled) { background: #b02a37; }
+        .status {
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .status-disconnected { background: #f8d7da; color: #721c24; }
+        .status-connecting { background: #fff3cd; color: #856404; }
+        .status-connected { background: #d4edda; color: #155724; }
+        .meter-container { margin-top: 15px; }
+        .meter-label { font-size: 13px; color: #666; margin-bottom: 5px; }
+        .meter {
+            height: 24px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .meter-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #20c997);
+            width: 0%;
+            transition: width 0.1s;
+        }
+        .log-container {
+            background: #1e1e1e;
+            border-radius: 4px;
+            padding: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .log-entry { color: #d4d4d4; }
+        .log-entry.error { color: #f48771; }
+        .log-entry.success { color: #89d185; }
+        .log-entry .time { color: #6a9955; }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+        }
+        .stat-item {
+            background: #f8f9fa;
+            border-radius: 6px;
+            padding: 12px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 1.4em;
+            font-weight: 600;
+            color: #333;
+        }
+        .stat-label {
+            font-size: 0.75em;
+            color: #666;
+            margin-top: 4px;
+        }
+        .stat-good { color: #28a745; }
+        .stat-warn { color: #ffc107; }
+        .stat-bad { color: #dc3545; }
+    </style>
+</head>
+<body>
+    <h1>BASS WebRTC - WebSocket Signaling</h1>
+    <p class="subtitle">Bidirectional audio via WebSocket signaling server with room-based routing</p>
+
+    <div class="card">
+        <h2>Connection Settings</h2>
+        <div class="form-row">
+            <label>WebSocket URL:</label>
+            <input type="text" id="wsUrl" value="ws://localhost:8080" placeholder="ws://localhost:8080">
+        </div>
+        <div class="form-row">
+            <label>Room ID:</label>
+            <input type="text" id="roomId" value="studio-1" placeholder="studio-1">
+            <span style="color: #666; font-size: 12px;">Messages are only shared within the same room</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Audio Settings</h2>
+        <div class="checkbox-row">
+            <label><input type="checkbox" id="echoCancellation"> Echo Cancellation</label>
+            <label><input type="checkbox" id="noiseSuppression"> Noise Suppression</label>
+            <label><input type="checkbox" id="autoGainControl"> Auto Gain Control</label>
+        </div>
+        <div class="form-row">
+            <label>Mode:</label>
+            <select id="audioMode">
+                <option value="music">Music (Stereo, High Quality)</option>
+                <option value="voice">Voice (Mono, Low Latency)</option>
+            </select>
+        </div>
+        <div class="form-row">
+            <label>Bitrate (kbps):</label>
+            <input type="number" id="bitrate" value="128" min="32" max="256">
+        </div>
+        <div class="form-row">
+            <label>Microphone:</label>
+            <select id="audioDevice"></select>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Connection</h2>
+        <div class="btn-group">
+            <button id="connectBtn" class="btn-primary" onclick="connect()">Connect</button>
+            <button id="disconnectBtn" class="btn-danger" onclick="disconnect()" disabled>Disconnect</button>
+        </div>
+        <div id="status" class="status status-disconnected">Disconnected</div>
+    </div>
+
+    <div class="two-col">
+        <div class="card">
+            <h2>Sending (Microphone)</h2>
+            <div class="meter-container">
+                <div class="meter-label">Microphone Level</div>
+                <div class="meter"><div id="sendMeter" class="meter-fill"></div></div>
+            </div>
+        </div>
+        <div class="card">
+            <h2>Receiving (From Server)</h2>
+            <div class="meter-container">
+                <div class="meter-label">Playback Level</div>
+                <div class="meter"><div id="recvMeter" class="meter-fill"></div></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card" id="statsCard" style="display: none;">
+        <h2>Connection Statistics</h2>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <div id="statRtt" class="stat-value">--</div>
+                <div class="stat-label">RTT (ms)</div>
+            </div>
+            <div class="stat-item">
+                <div id="statJitter" class="stat-value">--</div>
+                <div class="stat-label">Jitter (ms)</div>
+            </div>
+            <div class="stat-item">
+                <div id="statLoss" class="stat-value">--</div>
+                <div class="stat-label">Packet Loss %</div>
+            </div>
+            <div class="stat-item">
+                <div id="statPacketsSent" class="stat-value">--</div>
+                <div class="stat-label">Packets Sent</div>
+            </div>
+            <div class="stat-item">
+                <div id="statPacketsRecv" class="stat-value">--</div>
+                <div class="stat-label">Packets Received</div>
+            </div>
+            <div class="stat-item">
+                <div id="statBytesSent" class="stat-value">--</div>
+                <div class="stat-label">Bytes Sent</div>
+            </div>
+            <div class="stat-item">
+                <div id="statBytesRecv" class="stat-value">--</div>
+                <div class="stat-label">Bytes Received</div>
+            </div>
+            <div class="stat-item">
+                <div id="statBitrate" class="stat-value">--</div>
+                <div class="stat-label">Bitrate (kbps)</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Log</h2>
+        <div id="log" class="log-container"></div>
+    </div>
+
+    <script>
+        // State
+        let ws = null;
+        let pc = null;
+        let localStream = null;
+        let audioContext = null;
+        let sendAnalyser = null;
+        let recvAnalyser = null;
+        let pendingIceCandidates = [];
+        let remoteDescriptionSet = false;
+        let statsInterval = null;
+        let lastBytesSent = 0;
+        let lastBytesRecv = 0;
+        let lastStatsTime = Date.now();
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            populateDevices();
+            log('Ready. Configure settings and click Connect.');
+        });
+
+        async function populateDevices() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioInputs = devices.filter(d => d.kind === 'audioinput');
+                const select = document.getElementById('audioDevice');
+                select.innerHTML = '';
+
+                audioInputs.forEach((device, i) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.textContent = device.label || `Microphone ${i + 1}`;
+                    select.appendChild(option);
+                });
+
+                log(`Found ${audioInputs.length} audio input device(s)`);
+            } catch (e) {
+                log(`Error enumerating devices: ${e.message}`, 'error');
+            }
+        }
+
+        function log(msg, type = '') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry ' + type;
+            entry.innerHTML = `<span class="time">[${time}]</span> ${msg}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function setStatus(text, state) {
+            const el = document.getElementById('status');
+            el.textContent = text;
+            el.className = 'status status-' + state;
+        }
+
+        function getAudioConstraints() {
+            const mode = document.getElementById('audioMode').value;
+            const isMusic = mode === 'music';
+
+            return {
+                deviceId: document.getElementById('audioDevice').value || undefined,
+                echoCancellation: document.getElementById('echoCancellation').checked,
+                noiseSuppression: document.getElementById('noiseSuppression').checked,
+                autoGainControl: document.getElementById('autoGainControl').checked,
+                sampleRate: 48000,
+                channelCount: isMusic ? { ideal: 2 } : 1
+            };
+        }
+
+        // SDP modification for stereo reception
+        function enableStereoOpus(sdp) {
+            const lines = sdp.split('\r\n');
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('a=fmtp:') && lines[i].toLowerCase().includes('opus')) {
+                    if (!lines[i].includes('stereo')) {
+                        lines[i] += ';stereo=1';
+                    }
+                    if (!lines[i].includes('sprop-stereo')) {
+                        lines[i] += ';sprop-stereo=1';
+                    }
+                }
+            }
+            return lines.join('\r\n');
+        }
+
+        // SDP modification for bitrate and stereo sending
+        function setAudioBitrate(sdp) {
+            const bitrate = parseInt(document.getElementById('bitrate').value) || 128;
+            const mode = document.getElementById('audioMode').value;
+            const isVoice = mode === 'voice';
+            const maxBitrate = bitrate * 1000;
+
+            const lines = sdp.split('\r\n');
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('a=fmtp:') && lines[i].toLowerCase().includes('opus')) {
+                    const payloadMatch = lines[i].match(/a=fmtp:(\d+)/);
+                    if (payloadMatch) {
+                        const payload = payloadMatch[1];
+                        if (isVoice) {
+                            lines[i] = `a=fmtp:${payload} minptime=10;useinbandfec=1;maxaveragebitrate=${maxBitrate}`;
+                        } else {
+                            lines[i] = `a=fmtp:${payload} maxplaybackrate=48000;stereo=1;sprop-stereo=1;maxaveragebitrate=${maxBitrate}`;
+                        }
+                    }
+                }
+            }
+            return lines.join('\r\n');
+        }
+
+        async function connect() {
+            try {
+                setStatus('Connecting...', 'connecting');
+                const baseUrl = document.getElementById('wsUrl').value.replace(/\/$/, '');
+                const roomId = document.getElementById('roomId').value.trim() || 'default';
+                const wsUrl = `${baseUrl}/${roomId}`;
+                log(`Connecting to ${wsUrl} (room: '${roomId}')...`);
+
+                // Connect to WebSocket signaling server
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = async () => {
+                    log(`WebSocket connected to room '${roomId}'`, 'success');
+
+                    // Get microphone
+                    const constraints = getAudioConstraints();
+                    log(`Audio constraints: ${JSON.stringify(constraints)}`);
+
+                    try {
+                        localStream = await navigator.mediaDevices.getUserMedia({
+                            audio: constraints,
+                            video: false
+                        });
+                        log('Microphone access granted', 'success');
+                    } catch (e) {
+                        log(`Microphone error: ${e.message}`, 'error');
+                        disconnect();
+                        return;
+                    }
+
+                    // Setup audio context and analysers
+                    if (!audioContext) {
+                        audioContext = new AudioContext({ sampleRate: 48000 });
+                    }
+                    const source = audioContext.createMediaStreamSource(localStream);
+                    sendAnalyser = audioContext.createAnalyser();
+                    sendAnalyser.fftSize = 256;
+                    source.connect(sendAnalyser);
+
+                    // Create peer connection
+                    pc = new RTCPeerConnection({
+                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                    });
+
+                    // Add local audio tracks
+                    localStream.getAudioTracks().forEach(track => {
+                        pc.addTrack(track, localStream);
+                    });
+
+                    // Handle incoming tracks
+                    pc.ontrack = (event) => {
+                        log('Received remote audio track', 'success');
+                        const audio = new Audio();
+                        audio.srcObject = event.streams[0];
+                        audio.play();
+
+                        // Setup receive analyser
+                        const recvSource = audioContext.createMediaStreamSource(event.streams[0]);
+                        recvAnalyser = audioContext.createAnalyser();
+                        recvAnalyser.fftSize = 256;
+                        recvSource.connect(recvAnalyser);
+                    };
+
+                    // Connection state
+                    pc.onconnectionstatechange = () => {
+                        log(`Connection state: ${pc.connectionState}`);
+                        if (pc.connectionState === 'connected') {
+                            setStatus('Connected - Audio flowing', 'connected');
+                            startStats();
+                        } else if (pc.connectionState === 'failed') {
+                            setStatus('Connection failed', 'disconnected');
+                            stopStats();
+                        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+                            stopStats();
+                        }
+                    };
+
+                    // ICE candidates
+                    pc.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            const msg = {
+                                type: 'ice',
+                                candidate: event.candidate.candidate,
+                                sdpMLineIndex: event.candidate.sdpMLineIndex,
+                                sdpMid: event.candidate.sdpMid
+                            };
+                            ws.send(JSON.stringify(msg));
+                        }
+                    };
+
+                    // Create and send offer
+                    let offer = await pc.createOffer();
+
+                    // Modify SDP for stereo and bitrate
+                    offer = new RTCSessionDescription({
+                        type: 'offer',
+                        sdp: setAudioBitrate(enableStereoOpus(offer.sdp))
+                    });
+
+                    await pc.setLocalDescription(offer);
+
+                    // Wait for ICE gathering
+                    await waitForIce(pc);
+
+                    // Send offer
+                    const localDesc = pc.localDescription;
+                    log('Sending SDP offer...');
+                    ws.send(JSON.stringify({
+                        type: 'offer',
+                        sdp: localDesc.sdp
+                    }));
+
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('disconnectBtn').disabled = false;
+
+                    updateMeters();
+                };
+
+                ws.onmessage = async (event) => {
+                    const msg = JSON.parse(event.data);
+
+                    if (msg.type === 'answer') {
+                        log('Received SDP answer');
+                        await pc.setRemoteDescription({
+                            type: 'answer',
+                            sdp: msg.sdp
+                        });
+                        remoteDescriptionSet = true;
+
+                        // Apply any pending ICE candidates
+                        for (const candidate of pendingIceCandidates) {
+                            try {
+                                await pc.addIceCandidate(candidate);
+                            } catch (e) {
+                                log(`ICE error (queued): ${e.message}`, 'error');
+                            }
+                        }
+                        pendingIceCandidates = [];
+                    } else if (msg.type === 'ice') {
+                        if (msg.candidate) {
+                            const iceCandidate = {
+                                candidate: msg.candidate,
+                                sdpMLineIndex: msg.sdpMLineIndex,
+                                sdpMid: msg.sdpMid
+                            };
+
+                            if (remoteDescriptionSet) {
+                                // Apply immediately
+                                try {
+                                    await pc.addIceCandidate(iceCandidate);
+                                } catch (e) {
+                                    log(`ICE error: ${e.message}`, 'error');
+                                }
+                            } else {
+                                // Queue for later
+                                pendingIceCandidates.push(iceCandidate);
+                            }
+                        }
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    log(`WebSocket error: ${error}`, 'error');
+                    setStatus('WebSocket error', 'disconnected');
+                };
+
+                ws.onclose = () => {
+                    log('WebSocket closed');
+                    if (pc && pc.connectionState !== 'connected') {
+                        setStatus('Disconnected', 'disconnected');
+                    }
+                };
+
+            } catch (e) {
+                log(`Connect error: ${e.message}`, 'error');
+                setStatus('Error: ' + e.message, 'disconnected');
+                disconnect();
+            }
+        }
+
+        function disconnect() {
+            log('Disconnecting...');
+
+            stopStats();
+
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+
+            if (localStream) {
+                localStream.getTracks().forEach(t => t.stop());
+                localStream = null;
+            }
+
+            sendAnalyser = null;
+            recvAnalyser = null;
+            pendingIceCandidates = [];
+            remoteDescriptionSet = false;
+
+            setStatus('Disconnected', 'disconnected');
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('disconnectBtn').disabled = true;
+            document.getElementById('sendMeter').style.width = '0%';
+            document.getElementById('recvMeter').style.width = '0%';
+        }
+
+        function waitForIce(pc) {
+            return new Promise(resolve => {
+                if (pc.iceGatheringState === 'complete') {
+                    resolve();
+                } else {
+                    const check = () => {
+                        if (pc.iceGatheringState === 'complete') {
+                            pc.removeEventListener('icegatheringstatechange', check);
+                            resolve();
+                        }
+                    };
+                    pc.addEventListener('icegatheringstatechange', check);
+                    setTimeout(resolve, 3000); // Timeout fallback
+                }
+            });
+        }
+
+        function updateMeters() {
+            if (sendAnalyser) {
+                const data = new Uint8Array(sendAnalyser.frequencyBinCount);
+                sendAnalyser.getByteFrequencyData(data);
+                const avg = data.reduce((a, b) => a + b, 0) / data.length;
+                document.getElementById('sendMeter').style.width = Math.min(100, avg) + '%';
+            }
+
+            if (recvAnalyser) {
+                const data = new Uint8Array(recvAnalyser.frequencyBinCount);
+                recvAnalyser.getByteFrequencyData(data);
+                const avg = data.reduce((a, b) => a + b, 0) / data.length;
+                document.getElementById('recvMeter').style.width = Math.min(100, avg) + '%';
+            }
+
+            if (sendAnalyser || recvAnalyser) {
+                requestAnimationFrame(updateMeters);
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+        }
+
+        function formatNumber(num) {
+            if (num < 1000) return num.toString();
+            if (num < 1000000) return (num / 1000).toFixed(1) + 'K';
+            return (num / 1000000).toFixed(2) + 'M';
+        }
+
+        function setStatClass(elementId, value, goodMax, warnMax) {
+            const el = document.getElementById(elementId);
+            el.classList.remove('stat-good', 'stat-warn', 'stat-bad');
+            if (value <= goodMax) {
+                el.classList.add('stat-good');
+            } else if (value <= warnMax) {
+                el.classList.add('stat-warn');
+            } else {
+                el.classList.add('stat-bad');
+            }
+        }
+
+        async function updateStats() {
+            if (!pc) return;
+
+            try {
+                const stats = await pc.getStats();
+                let rtt = null;
+                let jitter = null;
+                let packetsLost = 0;
+                let fractionLost = 0;
+                let packetsSent = 0;
+                let packetsRecv = 0;
+                let bytesSent = 0;
+                let bytesRecv = 0;
+
+                stats.forEach(report => {
+                    if (report.type === 'remote-inbound-rtp' && report.kind === 'audio') {
+                        // RTT from remote-inbound-rtp (echo of our outbound)
+                        if (report.roundTripTime !== undefined) {
+                            rtt = report.roundTripTime * 1000; // Convert to ms
+                        }
+                        if (report.packetsLost !== undefined) {
+                            packetsLost = report.packetsLost;
+                        }
+                        if (report.fractionLost !== undefined) {
+                            fractionLost = report.fractionLost * 100; // Convert to %
+                        }
+                    }
+                    if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                        if (report.jitter !== undefined) {
+                            jitter = report.jitter * 1000; // Convert to ms
+                        }
+                        if (report.packetsReceived !== undefined) {
+                            packetsRecv = report.packetsReceived;
+                        }
+                        if (report.bytesReceived !== undefined) {
+                            bytesRecv = report.bytesReceived;
+                        }
+                    }
+                    if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+                        if (report.packetsSent !== undefined) {
+                            packetsSent = report.packetsSent;
+                        }
+                        if (report.bytesSent !== undefined) {
+                            bytesSent = report.bytesSent;
+                        }
+                    }
+                });
+
+                // Calculate bitrate
+                const now = Date.now();
+                const elapsed = (now - lastStatsTime) / 1000;
+                let bitrateSend = 0;
+                let bitrateRecv = 0;
+                if (elapsed > 0) {
+                    bitrateSend = ((bytesSent - lastBytesSent) * 8 / 1000) / elapsed;
+                    bitrateRecv = ((bytesRecv - lastBytesRecv) * 8 / 1000) / elapsed;
+                }
+                lastBytesSent = bytesSent;
+                lastBytesRecv = bytesRecv;
+                lastStatsTime = now;
+
+                // Update UI
+                const rttEl = document.getElementById('statRtt');
+                const jitterEl = document.getElementById('statJitter');
+                const lossEl = document.getElementById('statLoss');
+
+                if (rtt !== null) {
+                    rttEl.textContent = rtt.toFixed(1);
+                    setStatClass('statRtt', rtt, 50, 150);
+                } else {
+                    rttEl.textContent = '--';
+                }
+
+                if (jitter !== null) {
+                    jitterEl.textContent = jitter.toFixed(1);
+                    setStatClass('statJitter', jitter, 10, 30);
+                } else {
+                    jitterEl.textContent = '--';
+                }
+
+                lossEl.textContent = fractionLost.toFixed(2);
+                setStatClass('statLoss', fractionLost, 1, 5);
+
+                document.getElementById('statPacketsSent').textContent = formatNumber(packetsSent);
+                document.getElementById('statPacketsRecv').textContent = formatNumber(packetsRecv);
+                document.getElementById('statBytesSent').textContent = formatBytes(bytesSent);
+                document.getElementById('statBytesRecv').textContent = formatBytes(bytesRecv);
+
+                const totalBitrate = bitrateSend + bitrateRecv;
+                document.getElementById('statBitrate').textContent = totalBitrate.toFixed(0);
+
+            } catch (e) {
+                // Stats not available yet
+            }
+        }
+
+        function startStats() {
+            document.getElementById('statsCard').style.display = 'block';
+            lastBytesSent = 0;
+            lastBytesRecv = 0;
+            lastStatsTime = Date.now();
+            statsInterval = setInterval(updateStats, 1000);
+        }
+
+        function stopStats() {
+            if (statsInterval) {
+                clearInterval(statsInterval);
+                statsInterval = null;
+            }
+            document.getElementById('statsCard').style.display = 'none';
+        }
+    </script>
+</body>
+</html>

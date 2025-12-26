@@ -36,6 +36,14 @@ parking_lot = "0.12"
 # Lazy initialization
 lazy_static = "1.4"
 
+# WebSocket for signaling server
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
+# JSON for signaling messages
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }
 
@@ -53,3 +61,7 @@ path = "examples/webrtc_test.rs"
 [[example]]
 name = "webrtc_mediamtx_test"
 path = "examples/webrtc_mediamtx_test.rs"
+
+[[example]]
+name = "webrtc_bidirectional"
+path = "examples/webrtc_bidirectional.rs"

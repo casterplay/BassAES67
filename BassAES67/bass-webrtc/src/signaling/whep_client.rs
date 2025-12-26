@@ -418,7 +418,12 @@ async fn spawn_track_reader(
             }
             Err(e) => {
                 let err_str = e.to_string().to_lowercase();
-                if err_str.contains("eof") || err_str.contains("closed") {
+                // Gracefully exit on expected shutdown errors
+                if err_str.contains("eof")
+                    || err_str.contains("closed")
+                    || err_str.contains("nil")
+                    || err_str.contains("must not be")
+                {
                     break;
                 }
                 eprintln!("WHEP: RTP read error: {}", e);

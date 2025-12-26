@@ -918,6 +918,23 @@ pub unsafe extern "system" fn BASS_WEBRTC_WhipFree(handle: *mut c_void) -> i32 {
     1
 }
 
+/// Check if WHIP client is connected.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_ConnectWhip
+///
+/// # Returns
+/// 1 if connected, 0 if not connected or error
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_WhipIsConnected(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let wrapper = &*(handle as *const WhipClientWrapper);
+    if wrapper.client.is_connected() { 1 } else { 0 }
+}
+
 /// Connect to a WHEP server and receive audio.
 ///
 /// Creates a WebRTC connection to an external WHEP server (like MediaMTX)
@@ -1039,6 +1056,23 @@ pub unsafe extern "system" fn BASS_WEBRTC_WhepGetStream(handle: *mut c_void) -> 
     wrapper.input_handle
 }
 
+/// Check if WHEP client is connected.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_ConnectWhep
+///
+/// # Returns
+/// 1 if connected, 0 if not connected or error
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_WhepIsConnected(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let wrapper = &*(handle as *const WhepClientWrapper);
+    if wrapper.client.is_connected() { 1 } else { 0 }
+}
+
 /// Disconnect from the WHEP server and free resources.
 ///
 /// # Arguments
@@ -1064,5 +1098,665 @@ pub unsafe extern "system" fn BASS_WEBRTC_WhepFree(handle: *mut c_void) -> i32 {
     let _ = RUNTIME.block_on(wrapper.client.disconnect());
 
     // Input stream is dropped when wrapper is dropped
+    1
+}
+
+// ============================================================================
+// WebSocket Signaling Server API
+// ============================================================================
+
+/// Create a WebSocket signaling server.
+///
+/// The signaling server is a pure WebSocket relay - it does NOT handle any
+/// WebRTC logic. It simply relays JSON messages between connected clients
+/// (browser and Rust WebRTC peer).
+///
+/// # Arguments
+/// * `port` - Port to listen on (e.g., 8080)
+///
+/// # Returns
+/// Handle on success, null on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_CreateSignalingServer(port: u16) -> *mut c_void {
+    let server = signaling::SignalingServer::new(port);
+    Box::into_raw(Box::new(server)) as *mut c_void
+}
+
+/// Start the signaling server.
+///
+/// This starts the WebSocket server in a background thread. Clients can
+/// connect to ws://host:port/ and messages are relayed between them.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreateSignalingServer
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_SignalingServerStart(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let server = &*(handle as *const signaling::SignalingServer);
+
+    // Clone Arc references for the spawn
+    let port = server.port();
+
+    // Start server in background
+    RUNTIME.spawn(async move {
+        // We need to recreate the server in the async context
+        let server = signaling::SignalingServer::new(port);
+        if let Err(e) = server.run().await {
+            eprintln!("Signaling server error: {}", e);
+        }
+    });
+
+    1
+}
+
+/// Stop the signaling server.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreateSignalingServer
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_SignalingServerStop(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let server = &*(handle as *const signaling::SignalingServer);
+    server.stop();
+    1
+}
+
+/// Get the number of connected clients.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreateSignalingServer
+///
+/// # Returns
+/// Number of connected WebSocket clients
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_SignalingServerClientCount(handle: *mut c_void) -> u32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let server = &*(handle as *const signaling::SignalingServer);
+    server.client_count() as u32
+}
+
+/// Free signaling server resources.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreateSignalingServer
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_SignalingServerFree(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let server = Box::from_raw(handle as *mut signaling::SignalingServer);
+    server.stop();
+    1
+}
+
+// ============================================================================
+// WebSocket Peer API (Bidirectional WebRTC via Signaling)
+// ============================================================================
+
+/// Callback types for peer events
+type OnConnectedCallback = unsafe extern "C" fn(user: *mut c_void);
+type OnDisconnectedCallback = unsafe extern "C" fn(user: *mut c_void);
+type OnErrorCallback = unsafe extern "C" fn(error_code: u32, error_msg: *const c_char, user: *mut c_void);
+type OnStatsCallback = unsafe extern "C" fn(stats: *const WebRtcPeerStatsFFI, user: *mut c_void);
+
+/// FFI-safe WebRTC peer statistics for C# interop
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WebRtcPeerStatsFFI {
+    pub packets_sent: u64,
+    pub packets_received: u64,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub round_trip_time_ms: u32,
+    pub packets_lost: i64,
+    pub fraction_lost_percent: f32,  // 0.0 - 100.0
+    pub jitter_ms: u32,
+    pub nack_count: u64,
+}
+
+/// Wrapper for WebRTC peer with BASS audio streams
+struct WebRtcPeerWrapper {
+    peer: signaling::WebRtcPeer,
+    source_channel: DWORD,
+    sample_rate: u32,
+    channels: u16,
+    opus_bitrate: u32,
+    buffer_ms: u32,
+    decode_stream: u8,
+    output_stream: Option<WebRtcOutputStream>,
+    input_stream: Option<Box<WebRtcInputStream>>,
+    input_handle: HSTREAM,
+    // Callbacks for C# events
+    on_connected: Option<OnConnectedCallback>,
+    on_disconnected: Option<OnDisconnectedCallback>,
+    on_error: Option<OnErrorCallback>,
+    callback_user: *mut c_void,
+    // Stats callback
+    on_stats: Option<OnStatsCallback>,
+    stats_user: *mut c_void,
+    stats_interval_ms: u32,
+    stats_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Create a WebRTC peer that connects via WebSocket signaling with room support.
+///
+/// This creates a bidirectional WebRTC connection with a single peer
+/// connection (sendrecv) and DataChannel support. Messages are only
+/// exchanged with other clients in the same room.
+///
+/// # Arguments
+/// * `signaling_url` - WebSocket signaling server base URL (e.g., "ws://localhost:8080")
+/// * `room_id` - Room identifier for signaling isolation (e.g., "studio-1")
+/// * `source_channel` - BASS channel to send audio from (0 if receive-only)
+/// * `sample_rate` - Sample rate (48000 recommended)
+/// * `channels` - Number of channels (1 or 2)
+/// * `opus_bitrate` - OPUS bitrate in kbps (for sending)
+/// * `buffer_ms` - Buffer size in ms for received audio
+/// * `decode_stream` - Set to 1 for BASS_STREAM_DECODE flag
+///
+/// # Returns
+/// Handle on success, null on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_CreatePeer(
+    signaling_url: *const c_char,
+    room_id: *const c_char,
+    source_channel: DWORD,
+    sample_rate: u32,
+    channels: u16,
+    opus_bitrate: u32,
+    buffer_ms: u32,
+    decode_stream: u8,
+) -> *mut c_void {
+    if signaling_url.is_null() || room_id.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return std::ptr::null_mut();
+    }
+
+    let url = CStr::from_ptr(signaling_url).to_string_lossy().to_string();
+    let room = CStr::from_ptr(room_id).to_string_lossy().to_string();
+    let ice_servers = ice::google_stun_servers();
+    let buffer_samples = (sample_rate as usize / 1000) * buffer_ms as usize * channels as usize * 3;
+
+    let peer = signaling::WebRtcPeer::new(
+        &url,
+        &room,
+        ice_servers,
+        sample_rate,
+        channels,
+        buffer_samples,
+    );
+
+    let wrapper = WebRtcPeerWrapper {
+        peer,
+        source_channel,
+        sample_rate,
+        channels,
+        opus_bitrate,
+        buffer_ms,
+        decode_stream,
+        output_stream: None,
+        input_stream: None,
+        input_handle: 0,
+        // Callbacks (set via BASS_WEBRTC_PeerSetCallbacks)
+        on_connected: None,
+        on_disconnected: None,
+        on_error: None,
+        callback_user: std::ptr::null_mut(),
+        // Stats callback (set via BASS_WEBRTC_PeerSetStatsCallback)
+        on_stats: None,
+        stats_user: std::ptr::null_mut(),
+        stats_interval_ms: 0,
+        stats_running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+
+    Box::into_raw(Box::new(wrapper)) as *mut c_void
+}
+
+/// Set callbacks for peer events (connected, disconnected, error).
+///
+/// These callbacks fire when the peer connection state changes:
+/// - on_connected: Called when WebRTC connection is established
+/// - on_disconnected: Called when WebRTC connection is closed
+/// - on_error: Called when an error occurs (with error code and message)
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreatePeer
+/// * `on_connected` - Callback for connection established (may be null)
+/// * `on_disconnected` - Callback for connection closed (may be null)
+/// * `on_error` - Callback for errors (may be null)
+/// * `user` - User data pointer passed to callbacks
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_PeerSetCallbacks(
+    handle: *mut c_void,
+    on_connected: Option<OnConnectedCallback>,
+    on_disconnected: Option<OnDisconnectedCallback>,
+    on_error: Option<OnErrorCallback>,
+    user: *mut c_void,
+) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let wrapper = &mut *(handle as *mut WebRtcPeerWrapper);
+    wrapper.on_connected = on_connected;
+    wrapper.on_disconnected = on_disconnected;
+    wrapper.on_error = on_error;
+    wrapper.callback_user = user;
+
+    // Also set callbacks on the underlying WebRtcPeer so they fire on state changes
+    let peer_callbacks = signaling::ws_peer::PeerCallbacks::new(
+        on_connected,
+        on_disconnected,
+        on_error,
+        user,
+    );
+    wrapper.peer.set_callbacks(peer_callbacks);
+
+    1
+}
+
+/// Set callback for statistics updates.
+///
+/// When enabled, the callback fires periodically with current statistics.
+/// Call this after creating the peer but before or after connecting.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreatePeer
+/// * `callback` - Callback for stats updates (null to disable)
+/// * `interval_ms` - Interval between updates in milliseconds (e.g., 1000 for 1 second)
+/// * `user` - User data pointer passed to callback
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_PeerSetStatsCallback(
+    handle: *mut c_void,
+    callback: Option<OnStatsCallback>,
+    interval_ms: u32,
+    user: *mut c_void,
+) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let wrapper = &mut *(handle as *mut WebRtcPeerWrapper);
+
+    // Stop any existing stats loop
+    wrapper.stats_running.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // Store new callback settings
+    wrapper.on_stats = callback;
+    wrapper.stats_user = user;
+    wrapper.stats_interval_ms = interval_ms;
+
+    // If callback is set and we're connected, start the stats loop
+    if callback.is_some() && interval_ms > 0 && wrapper.peer.is_connected() {
+        start_stats_loop(wrapper);
+    }
+
+    1
+}
+
+/// Start the stats collection loop (internal helper)
+unsafe fn start_stats_loop(wrapper: &mut WebRtcPeerWrapper) {
+    if wrapper.on_stats.is_none() || wrapper.stats_interval_ms == 0 {
+        return;
+    }
+
+    // Get peer connection for stats collection
+    let pc = match wrapper.peer.peer_connection() {
+        Some(pc) => pc.clone(),
+        None => return,
+    };
+
+    let stats = wrapper.peer.stats.clone();
+    let callback = wrapper.on_stats;
+    // Convert raw pointer to usize for Send safety - will be cast back in callback
+    let user_usize = wrapper.stats_user as usize;
+    let interval_ms = wrapper.stats_interval_ms;
+    let running = wrapper.stats_running.clone();
+
+    // Mark as running
+    running.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    // Spawn stats collection task
+    RUNTIME.spawn(async move {
+        use webrtc::stats::StatsReportType;
+
+        while running.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(interval_ms as u64)).await;
+
+            if !running.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+
+            // Collect stats from peer connection
+            let report = pc.get_stats().await;
+
+            for (_id, stat) in report.reports {
+                match stat {
+                    StatsReportType::RemoteInboundRTP(s) => {
+                        if let Some(rtt) = s.round_trip_time {
+                            stats.round_trip_time_ms.store(
+                                (rtt * 1000.0) as u32,
+                                std::sync::atomic::Ordering::Relaxed
+                            );
+                        }
+                        stats.packets_lost.store(s.packets_lost, std::sync::atomic::Ordering::Relaxed);
+                        stats.fraction_lost.store(
+                            (s.fraction_lost * 10000.0) as u32,
+                            std::sync::atomic::Ordering::Relaxed
+                        );
+                    }
+                    StatsReportType::InboundRTP(s) if s.kind == "audio" => {
+                        stats.packets_received.store(s.packets_received, std::sync::atomic::Ordering::Relaxed);
+                        stats.bytes_received.store(s.bytes_received, std::sync::atomic::Ordering::Relaxed);
+                        stats.nack_count.store(s.nack_count, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    StatsReportType::OutboundRTP(s) if s.kind == "audio" => {
+                        stats.packets_sent.store(s.packets_sent, std::sync::atomic::Ordering::Relaxed);
+                        stats.bytes_sent.store(s.bytes_sent, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Fire callback with snapshot
+            if let Some(cb) = callback {
+                let snapshot = stats.to_snapshot();
+                let ffi_stats = WebRtcPeerStatsFFI {
+                    packets_sent: snapshot.packets_sent,
+                    packets_received: snapshot.packets_received,
+                    bytes_sent: snapshot.bytes_sent,
+                    bytes_received: snapshot.bytes_received,
+                    round_trip_time_ms: snapshot.round_trip_time_ms,
+                    packets_lost: snapshot.packets_lost,
+                    fraction_lost_percent: snapshot.fraction_lost_percent,
+                    jitter_ms: snapshot.jitter_ms,
+                    nack_count: snapshot.nack_count,
+                };
+                // Cast usize back to pointer for callback
+                cb(&ffi_stats, user_usize as *mut c_void);
+            }
+        }
+    });
+}
+
+/// Connect the WebRTC peer to the signaling server (non-blocking).
+///
+/// This starts the connection process in the background and returns immediately.
+/// Use BASS_WEBRTC_PeerIsConnected to poll for connection status.
+/// Once connected, call BASS_WEBRTC_PeerSetupStreams to setup audio streams.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreatePeer
+///
+/// # Returns
+/// 1 on success (connection started), 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_PeerConnect(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    // Start connection in a dedicated background thread.
+    // We use std::thread::spawn because WebRtcPeer contains non-Send types.
+    // IMPORTANT: We use the GLOBAL RUNTIME via block_on so that the peer connection
+    // and its async tasks remain alive after this thread exits.
+    let handle_usize = handle as usize;
+
+    std::thread::spawn(move || {
+        // SAFETY: The handle must remain valid for the duration of this thread.
+        // The caller is responsible for not freeing the handle while connecting.
+        let wrapper = unsafe { &mut *(handle_usize as *mut WebRtcPeerWrapper) };
+
+        // Use the global RUNTIME - this ensures the peer connection stays alive
+        // because all async tasks (WebSocket, ICE, RTP) run on this runtime.
+        let result = RUNTIME.block_on(wrapper.peer.connect());
+        if let Err(e) = result {
+            eprintln!("BASS_WEBRTC_PeerConnect error: {}", e);
+        }
+    });
+
+    1
+}
+
+/// Setup audio streams after connection is established.
+///
+/// Call this after BASS_WEBRTC_PeerIsConnected returns 1.
+/// This sets up the output stream (BASS -> WebRTC) and input stream (WebRTC -> BASS).
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreatePeer
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_PeerSetupStreams(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let wrapper = &mut *(handle as *mut WebRtcPeerWrapper);
+
+    // Check if already setup
+    if wrapper.input_handle != 0 || wrapper.output_stream.is_some() {
+        return 1; // Already setup
+    }
+
+    // Check if connected
+    if !wrapper.peer.is_connected() {
+        set_error(BASS_ERROR_START);
+        return 0;
+    }
+
+    // Setup output stream if we have a source channel
+    println!("[BASS_WEBRTC_PeerSetupStreams] source_channel={}", wrapper.source_channel);
+    if wrapper.source_channel != 0 {
+        if let Some(ref audio_track) = wrapper.peer.audio_track() {
+            println!("[BASS_WEBRTC_PeerSetupStreams] Creating output stream...");
+            let mut output = WebRtcOutputStream::new(
+                wrapper.source_channel,
+                (*audio_track).clone(),
+                wrapper.sample_rate,
+                wrapper.channels,
+                wrapper.opus_bitrate,
+                RUNTIME.handle().clone(),
+            );
+
+            if let Err(e) = output.start() {
+                eprintln!("BASS_WEBRTC_PeerSetupStreams: Failed to start output: {}", e);
+            } else {
+                println!("[BASS_WEBRTC_PeerSetupStreams] Output stream started successfully");
+                wrapper.output_stream = Some(output);
+            }
+        } else {
+            eprintln!("[BASS_WEBRTC_PeerSetupStreams] No audio track available!");
+        }
+    }
+
+    // Setup input stream for received audio
+    if let Some(consumer) = wrapper.peer.take_incoming_consumer() {
+        let mut input = Box::new(WebRtcInputStream::new(
+            wrapper.sample_rate,
+            wrapper.channels,
+            wrapper.buffer_ms,
+        ));
+
+        input.set_peer_consumer(0, consumer);
+
+        // Create BASS stream
+        let flags = if wrapper.decode_stream != 0 {
+            BASS_SAMPLE_FLOAT | BASS_STREAM_DECODE
+        } else {
+            BASS_SAMPLE_FLOAT
+        };
+
+        let input_ptr = input.as_mut() as *mut WebRtcInputStream;
+        let bass_stream = BASS_StreamCreate(
+            wrapper.sample_rate,
+            wrapper.channels as u32,
+            flags,
+            Some(input_stream_proc),
+            input_ptr as *mut c_void,
+        );
+
+        if bass_stream != 0 {
+            wrapper.input_stream = Some(input);
+            wrapper.input_handle = bass_stream;
+        }
+    }
+
+    // Start stats loop if callback was registered before connection
+    if wrapper.on_stats.is_some() && wrapper.stats_interval_ms > 0 {
+        start_stats_loop(wrapper);
+    }
+
+    1
+}
+
+/// Check if WebRTC peer is connected.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreatePeer
+///
+/// # Returns
+/// 1 if connected, 0 if not
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_PeerIsConnected(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let wrapper = &*(handle as *const WebRtcPeerWrapper);
+    if wrapper.peer.is_connected() { 1 } else { 0 }
+}
+
+/// Get the BASS input stream from a WebRTC peer (for received audio).
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreatePeer
+///
+/// # Returns
+/// BASS stream handle, or 0 if not available
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_PeerGetInputStream(handle: *mut c_void) -> HSTREAM {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let wrapper = &*(handle as *const WebRtcPeerWrapper);
+    wrapper.input_handle
+}
+
+/// Disconnect the WebRTC peer.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreatePeer
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_PeerDisconnect(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    let wrapper = &mut *(handle as *mut WebRtcPeerWrapper);
+
+    // Stop stats loop
+    wrapper.stats_running.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // Stop output stream
+    if let Some(ref mut output) = wrapper.output_stream {
+        output.stop();
+    }
+    wrapper.output_stream = None;
+
+    // Disconnect peer - use spawn instead of block_on to avoid panic when called from callback
+    // The peer connection will be closed asynchronously
+    if let Some(pc) = wrapper.peer.peer_connection().cloned() {
+        RUNTIME.spawn(async move {
+            let _ = pc.close().await;
+        });
+    }
+
+    1
+}
+
+/// Free WebRTC peer resources.
+///
+/// # Arguments
+/// * `handle` - Handle from BASS_WEBRTC_CreatePeer
+///
+/// # Returns
+/// 1 on success, 0 on failure
+#[no_mangle]
+pub unsafe extern "system" fn BASS_WEBRTC_PeerFree(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        set_error(BASS_ERROR_HANDLE);
+        return 0;
+    }
+
+    // First, get the peer connection Arc before taking ownership of wrapper
+    // This avoids lifetime issues with the spawned async task
+    let wrapper_ref = &*(handle as *const WebRtcPeerWrapper);
+    let peer_connection = wrapper_ref.peer.peer_connection().cloned();
+
+    // Stop stats loop before taking ownership
+    wrapper_ref.stats_running.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // Now take ownership and clean up synchronous resources
+    let mut wrapper = Box::from_raw(handle as *mut WebRtcPeerWrapper);
+
+    // Stop output stream
+    if let Some(ref mut output) = wrapper.output_stream {
+        output.stop();
+    }
+
+    // Free BASS input stream
+    if wrapper.input_handle != 0 {
+        BASS_StreamFree(wrapper.input_handle);
+    }
+
+    // Disconnect peer - spawn async task to avoid blocking/panic when called from callback
+    if let Some(pc) = peer_connection {
+        RUNTIME.spawn(async move {
+            let _ = pc.close().await;
+        });
+    }
+
+    // wrapper is dropped here, cleaning up the rest
+
     1
 }

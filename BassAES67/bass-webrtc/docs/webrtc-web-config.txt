@@ -1,0 +1,90 @@
+
+
+// WHEP Alter SDP to receive stereo:
+
+enableStereoOpus = (section) => {
+        let opusPayloadFormat = '';
+        let lines = section.split('\r\n');
+
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith('a=rtpmap:') && lines[i].toLowerCase().includes('opus/')) {
+                opusPayloadFormat = lines[i].slice('a=rtpmap:'.length).split(' ')[0];
+                break;
+            }
+        }
+
+        if (opusPayloadFormat === '') {
+            return section;
+        }
+
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith('a=fmtp:' + opusPayloadFormat + ' ')) {
+                if (!lines[i].includes('stereo')) {
+                    lines[i] += ';stereo=1';
+                }
+                if (!lines[i].includes('sprop-stereo')) {
+                    lines[i] += ';sprop-stereo=1';
+                }
+            }
+        }
+
+        return lines.join('\r\n');
+    };
+	
+
+
+// WHIP config "getUserMedia(constraints)" to disabe noicesurpression etc.
+
+		let audioConstraints = {
+            deviceId: this.config.audioDeviceId,
+        };
+
+        if (this.config.audioNoiceSuppression) {
+            audioConstraints.autoGainControl = this.config.audioAutoGainControl;
+            audioConstraints.echoCancellation = true;
+            audioConstraints.noiseSuppression = true;
+        } else {
+            audioConstraints.autoGainControl = this.config.audioAutoGainControl;
+            audioConstraints.echoCancellation = false;
+            audioConstraints.noiseSuppression = false;
+        }
+
+        const userMediaOptions = {
+            video: false,
+            audio: audioConstraints,
+        }	
+		
+		await navigator.getUserMedia(userMediaOptions)	
+	
+	
+	
+	
+// WHIP Alter SDP to send stereo in certian bitrate
+
+    setAudioBitrate = (section, bitrate, voice) => {
+        let opusPayloadFormat = '';
+        let lines = section.split('\r\n');
+
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith('a=rtpmap:') && lines[i].toLowerCase().includes('opus/')) {
+                opusPayloadFormat = lines[i].slice('a=rtpmap:'.length).split(' ')[0];
+                break;
+            }
+        }
+
+        if (opusPayloadFormat === '') {
+            return section;
+        }
+
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith('a=fmtp:' + opusPayloadFormat + ' ')) {
+                if (voice) {
+                    lines[i] = 'a=fmtp:' + opusPayloadFormat + ' minptime=10;useinbandfec=1;maxaveragebitrate=' + (parseInt(bitrate) * 1000).toString();
+                } else {
+                    lines[i] = 'a=fmtp:' + opusPayloadFormat + ' maxplaybackrate=48000;stereo=1;sprop-stereo=1;maxaveragebitrate=' + (parseInt(bitrate) * 1000).toString();
+                }
+            }
+        }
+
+        return lines.join('\r\n');
+    };	

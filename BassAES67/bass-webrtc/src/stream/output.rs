@@ -132,17 +132,33 @@ impl WebRtcOutputStream {
                 };
 
                 let samples_per_frame = encoder.total_samples_per_frame();
-                let bytes_per_frame = samples_per_frame * 4; // 4 bytes per float sample
 
-                // Audio buffer for BASS_ChannelGetData
+                // IMPORTANT: Source BASS channel is always stereo (2 channels)
+                // We need to read stereo samples and downmix to mono if channels == 1
+                let source_channels: usize = 2; // BASS source is always stereo
+                let source_samples_per_frame = (sample_rate as usize * FRAME_DURATION_MS as usize / 1000) * source_channels;
+                let bytes_per_frame = source_samples_per_frame * 4; // 4 bytes per float sample
+
+                // Audio buffer for BASS_ChannelGetData (always stereo)
+                let mut source_buffer = vec![0.0f32; source_samples_per_frame];
+                // Audio buffer for encoder (mono or stereo depending on channels)
                 let mut audio_buffer = vec![0.0f32; samples_per_frame];
                 // OPUS output buffer
                 let mut opus_buffer = vec![0u8; 4000];
 
                 let frame_duration = Duration::from_millis(FRAME_DURATION_MS as u64);
                 let mut next_tx = Instant::now() + frame_duration;
+                let mut frame_count: u64 = 0;
+
+                println!("[WebRtcOutputStream] TX thread started, sending audio...");
 
                 while running.load(Ordering::SeqCst) {
+                    frame_count += 1;
+                    // Log every 5 seconds (250 frames at 20ms each)
+                    if frame_count % 250 == 0 {
+                        println!("[WebRtcOutputStream] Sent {} frames ({} sec)",
+                            frame_count, frame_count / 50);
+                    }
                     // Wait until next TX time with precision timing
                     let now = Instant::now();
                     if next_tx > now {
@@ -156,19 +172,33 @@ impl WebRtcOutputStream {
                         }
                     }
 
-                    // Read samples from BASS channel
+                    // Read stereo samples from BASS channel
                     let bytes_read = unsafe {
                         BASS_ChannelGetData(
                             source_channel,
-                            audio_buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                            source_buffer.as_mut_ptr() as *mut std::ffi::c_void,
                             bytes_per_frame as DWORD | BASS_DATA_FLOAT,
                         )
                     };
 
                     // Handle underrun
                     if bytes_read == 0xFFFFFFFF || bytes_read == 0 {
-                        audio_buffer.fill(0.0);
+                        source_buffer.fill(0.0);
                         stats.underruns.fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    // Convert from stereo source to encoder format
+                    if channels == 1 {
+                        // Downmix stereo to mono: average L+R
+                        let mono_samples = source_samples_per_frame / 2;
+                        for i in 0..mono_samples {
+                            let left = source_buffer[i * 2];
+                            let right = source_buffer[i * 2 + 1];
+                            audio_buffer[i] = (left + right) * 0.5;
+                        }
+                    } else {
+                        // Stereo: copy directly
+                        audio_buffer.copy_from_slice(&source_buffer);
                     }
 
                     // Encode to OPUS
@@ -185,12 +215,21 @@ impl WebRtcOutputStream {
                             };
 
                             // Use runtime to send the sample
-                            let _ = runtime.block_on(async {
+                            let result = runtime.block_on(async {
                                 track.write_sample(&sample).await
                             });
 
-                            stats.packets_sent.fetch_add(1, Ordering::Relaxed);
-                            stats.bytes_sent.fetch_add(encoded_len as u64, Ordering::Relaxed);
+                            if let Err(e) = result {
+                                // Log first few errors then throttle
+                                let errors = stats.encode_errors.load(Ordering::Relaxed);
+                                if errors < 5 {
+                                    eprintln!("[WebRtcOutputStream] write_sample error: {}", e);
+                                }
+                                stats.encode_errors.fetch_add(1, Ordering::Relaxed);
+                            } else {
+                                stats.packets_sent.fetch_add(1, Ordering::Relaxed);
+                                stats.bytes_sent.fetch_add(encoded_len as u64, Ordering::Relaxed);
+                            }
                         }
                         Err(e) => {
                             stats.encode_errors.fetch_add(1, Ordering::Relaxed);

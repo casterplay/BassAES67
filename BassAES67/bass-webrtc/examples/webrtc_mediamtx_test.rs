@@ -1,8 +1,13 @@
-//! WebRTC MediaMTX Test
+//! WebRTC MediaMTX Test - 24/7 Mode
 //!
-//! Tests bass-webrtc with MediaMTX server:
+//! Tests bass-webrtc with MediaMTX server in a robust 24/7 operation mode:
 //! - WHIP: Push audio TO MediaMTX (browser can receive via WHEP)
 //! - WHEP: Pull audio FROM MediaMTX (browser sends via WHIP)
+//!
+//! Features:
+//! - WHEP retry loop: waits for browser to connect before receiving
+//! - Auto-reconnect on disconnect
+//! - Graceful Ctrl+C handling
 //!
 //! Usage:
 //!   # Start MediaMTX first, then:
@@ -22,7 +27,9 @@ use std::time::Duration;
 use bass_webrtc::{
     BASS_WEBRTC_ConnectWhip, BASS_WEBRTC_ConnectWhep,
     BASS_WEBRTC_WhipStart, BASS_WEBRTC_WhipStop, BASS_WEBRTC_WhipFree,
+    BASS_WEBRTC_WhipIsConnected,
     BASS_WEBRTC_WhepGetStream, BASS_WEBRTC_WhepFree,
+    BASS_WEBRTC_WhepIsConnected,
 };
 
 // BASS FFI types
@@ -98,6 +105,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut whip_url: Option<String> = None;
     let mut whep_url: Option<String> = None;
+    let mut retry_seconds: u64 = 3; // Default 3 seconds
 
     // Parse arguments
     let mut i = 1;
@@ -111,17 +119,30 @@ fn main() {
                 whep_url = Some(args[i + 1].clone());
                 i += 1;
             }
+            "--retry" if i + 1 < args.len() => {
+                retry_seconds = args[i + 1].parse().unwrap_or(3);
+                if retry_seconds < 1 { retry_seconds = 1; }
+                i += 1;
+            }
             "--help" | "-h" => {
-                println!("WebRTC MediaMTX Test");
+                println!("WebRTC MediaMTX Test - 24/7 Mode");
                 println!();
                 println!("Usage:");
                 println!("  webrtc_mediamtx_test --whip <url>         Push audio to MediaMTX");
                 println!("  webrtc_mediamtx_test --whep <url>         Pull audio from MediaMTX");
                 println!("  webrtc_mediamtx_test --whip <url> --whep <url>  Both directions");
+                println!("  webrtc_mediamtx_test --retry <seconds>    WHEP retry interval (default: 3)");
+                println!();
+                println!("Features:");
+                println!("  - WHEP automatically retries until browser connects");
+                println!("  - Auto-reconnects on disconnect");
+                println!("  - Runs until Ctrl+C");
                 println!();
                 println!("Examples:");
                 println!("  webrtc_mediamtx_test --whip http://localhost:8889/mystream/whip");
                 println!("  webrtc_mediamtx_test --whep http://localhost:8889/mystream/whep");
+                println!("  webrtc_mediamtx_test --whip http://localhost:8889/out/whip --whep http://localhost:8889/in/whep");
+                println!("  webrtc_mediamtx_test --whep http://localhost:8889/mystream/whep --retry 5");
                 return;
             }
             _ => {}
@@ -135,9 +156,9 @@ fn main() {
         return;
     }
 
-    println!("=================================");
-    println!("  WebRTC MediaMTX Test");
-    println!("=================================");
+    println!("==========================================");
+    println!("  WebRTC MediaMTX Test - 24/7 Mode");
+    println!("==========================================");
     println!();
 
     // Setup Ctrl+C handler
@@ -160,6 +181,7 @@ fn main() {
         let mut whep_handle: *mut c_void = ptr::null_mut();
         let mut tone_stream: HSTREAM = 0;
         let mut input_stream: HSTREAM = 0;
+        let mut whep_was_connected = false;
 
         // Setup WHIP (push audio to MediaMTX)
         if let Some(ref url) = whip_url {
@@ -212,68 +234,107 @@ fn main() {
             println!("[OK] Started WHIP streaming (sending 440Hz tone)");
         }
 
-        // Setup WHEP (pull audio from MediaMTX)
+        // WHEP info message
         if let Some(ref url) = whep_url {
             println!();
-            println!("WHEP Mode: Pulling audio from {}", url);
-
-            let url_cstr = std::ffi::CString::new(url.as_str()).unwrap();
-            whep_handle = BASS_WEBRTC_ConnectWhep(
-                url_cstr.as_ptr(),
-                48000,
-                2,
-                100, // 100ms buffer
-                0,   // not decode-only (will play)
-            );
-
-            if whep_handle.is_null() {
-                println!("ERROR: Failed to connect to WHEP endpoint");
-                if !whip_handle.is_null() {
-                    BASS_WEBRTC_WhipStop(whip_handle);
-                    BASS_WEBRTC_WhipFree(whip_handle);
-                }
-                if tone_stream != 0 {
-                    BASS_StreamFree(tone_stream);
-                }
-                BASS_Free();
-                return;
-            }
-            println!("[OK] Connected to WHEP server");
-
-            // Get and play input stream
-            input_stream = BASS_WEBRTC_WhepGetStream(whep_handle);
-            if input_stream != 0 {
-                BASS_ChannelPlay(input_stream, FALSE);
-                println!("[OK] Playing received audio");
-            }
+            println!("WHEP Mode: Waiting for stream at {}", url);
+            println!("[..] Will connect when browser starts sending...");
         }
 
         println!();
-        println!("--- Running (Ctrl+C to stop) ---");
+        println!("--- Running 24/7 (Ctrl+C to stop) ---");
         println!();
 
-        // Monitor loop
+        // Monitor loop - handles WHEP retry and reconnection
         let mut frame_count: u64 = 0;
+        let mut last_status = String::new();
+        let mut retry_count = 0u32;
+        let mut last_whep_retry: u64 = 0;
+        let whep_retry_interval: u64 = retry_seconds * 10; // Convert seconds to 100ms ticks
+
         while running.load(Ordering::SeqCst) {
             frame_count += 1;
+
+            // WHEP connection management (retry every 3 seconds, not every 100ms)
+            if let Some(ref url) = whep_url {
+                let is_connected = if whep_handle.is_null() {
+                    false
+                } else {
+                    BASS_WEBRTC_WhepIsConnected(whep_handle) == 1
+                };
+
+                // Try to connect if not connected (respects --retry interval)
+                if whep_handle.is_null() && (frame_count - last_whep_retry) >= whep_retry_interval {
+                    last_whep_retry = frame_count;
+
+                    let url_cstr = std::ffi::CString::new(url.as_str()).unwrap();
+                    whep_handle = BASS_WEBRTC_ConnectWhep(
+                        url_cstr.as_ptr(),
+                        48000,
+                        2,
+                        100, // 100ms buffer
+                        0,   // not decode-only (will play)
+                    );
+
+                    if !whep_handle.is_null() {
+                        // Connected! Get and play input stream
+                        input_stream = BASS_WEBRTC_WhepGetStream(whep_handle);
+                        if input_stream != 0 {
+                            BASS_ChannelPlay(input_stream, FALSE);
+                        }
+                        println!("\r[OK] WHEP: Browser connected, receiving audio     ");
+                        whep_was_connected = true;
+                        retry_count = 0;
+                    } else {
+                        retry_count += 1;
+                    }
+                } else if !is_connected && whep_was_connected {
+                    // Was connected, now disconnected - cleanup and retry
+                    println!("\r[..] WHEP: Browser disconnected, waiting to reconnect...     ");
+                    if input_stream != 0 {
+                        BASS_ChannelStop(input_stream);
+                        input_stream = 0;
+                    }
+                    BASS_WEBRTC_WhepFree(whep_handle);
+                    whep_handle = ptr::null_mut();
+                    whep_was_connected = false;
+                    last_whep_retry = frame_count; // Reset retry timer
+                }
+            }
 
             // Print status every second
             if frame_count % 10 == 0 {
                 let mut status = String::new();
+                let seconds = frame_count / 10;
 
+                // WHIP status
                 if whip_url.is_some() {
-                    status.push_str("WHIP: sending");
+                    let whip_connected = !whip_handle.is_null() && BASS_WEBRTC_WhipIsConnected(whip_handle) == 1;
+                    if whip_connected {
+                        status.push_str("WHIP: sending");
+                    } else {
+                        status.push_str("WHIP: disconnected");
+                    }
                 }
 
+                // WHEP status
                 if whep_url.is_some() {
                     if !status.is_empty() {
                         status.push_str(" | ");
                     }
-                    status.push_str("WHEP: receiving");
+                    if !whep_handle.is_null() && BASS_WEBRTC_WhepIsConnected(whep_handle) == 1 {
+                        status.push_str("WHEP: receiving");
+                    } else {
+                        status.push_str(&format!("WHEP: waiting (retry #{})", retry_count));
+                    }
                 }
 
-                print!("\r[{}s] {}   ", frame_count / 10, status);
-                std::io::stdout().flush().unwrap();
+                // Only print if status changed or every 10 seconds
+                if status != last_status || seconds % 10 == 0 {
+                    print!("\r[{}s] {}     ", seconds, status);
+                    std::io::stdout().flush().unwrap();
+                    last_status = status;
+                }
             }
 
             thread::sleep(Duration::from_millis(100));

@@ -1,0 +1,92 @@
+C:\Dev\CasterPlay2025\BassAES67\BassAES67\webrtc_dotnet\Program.cs
+
+BASS WebRTC Plugin Test (C#)
+=========================
+
+[SignalingServer] Listening on ws://0.0.0.0:8080
+OK - InitBass: BASS_OK
+OK - BASS_PluginLoad bass_aes67.dll: BASS_OK
+Clock mode set to: System
+AES67 configured (interface=192.168.60.102, jitter=10ms, domain=1)
+
+Waiting for System lock...
+System locked!
+
+mixer: -2147483647
+Creating AES67 output stream...
+Output stream created (dest: 239.192.1.100:5004, 5ms/200pkt/s)
+
+Creating AES67 input stream... aes67://239.192.76.50:5004     
+Using direct P/Invoke (bypassing Bass.NET)...
+BASS_StreamCreateURL (aes67 plugin): BASS_OK, toBrowserChan=-2147483646
+[SignalingServer] Client 1 connected from 127.0.0.1:64810 to room 'studio-1'
+[SignalingServer] Room 'studio-1' now has 1 client(s)
+[WebRtcPeer] Connected to signaling server: ws://localhost:8080/studio-1 (room: 'studio-1')
+[SignalingServer] Client 2 connected from 127.0.0.1:64851 to room 'studio-1'
+[SignalingServer] Room 'studio-1' now has 2 client(s)
+[WebRtcPeer] Received offer
+[WebRtcPeer] Sent answer
+[WebRtcPeer] Connection state: Connected
+Connected!
+[BASS_WEBRTC_PeerSetupStreams] source_channel=2147483650
+[BASS_WEBRTC_PeerSetupStreams] Creating output stream...
+[BASS_WEBRTC_PeerSetupStreams] Output stream started successfully
+[WebRtcOutputStream] TX thread started, sending audio...
+[WebRtcPeer] WebRTC connected, signaling complete
+[SignalingServer] Client 1 left room 'studio-1', 1 client(s) remaining
+[WebRtcOutputStream] Sent 250 frames (5 sec)
+[SignalingServer] Client 2 left room 'studio-1', 0 client(s) remaining
+[SignalingServer] Room 'studio-1' deleted (empty)
+[SignalingServer] Client 3 connected from 127.0.0.1:64918 to room 'studio-1'
+[SignalingServer] Room 'studio-1' now has 1 client(s)
+[WebRtcOutputStream] Sent 500 frames (10 sec)
+[WebRtcPeer] Connection state: Disconnected
+Disconnected - recreating peer...
+[WebRtcPeer] RTP read error: DataChannel is not opened
+[WebRtcPeer] Connection state: Closed
+[SignalingServer] Client 4 connected from 127.0.0.1:64942 to room 'studio-1'
+[SignalingServer] Room 'studio-1' now has 2 client(s)
+[WebRtcPeer] Connected to signaling server: ws://localhost:8080/studio-1 (room: 'studio-1')
+[SignalingServer] Client 3 left room 'studio-1', 1 client(s) remaining
+[SignalingServer] Client 5 connected from 127.0.0.1:65015 to room 'studio-1'
+[SignalingServer] Room 'studio-1' now has 2 client(s)
+[WebRtcPeer] Received offer
+[WebRtcPeer] Sent answer
+[WebRtcPeer] Connection state: Connected
+Connected!
+[BASS_WEBRTC_PeerSetupStreams] source_channel=2147483650
+[BASS_WEBRTC_PeerSetupStreams] Creating output stream...
+[BASS_WEBRTC_PeerSetupStreams] Output stream started successfully
+[WebRtcOutputStream] TX thread started, sending audio...
+[WebRtcPeer] WebRTC connected, signaling complete
+[SignalingServer] Client 4 left room 'studio-1', 1 client(s) remaining
+[SignalingServer] Client 5 left room 'studio-1', 0 client(s) remaining
+[SignalingServer] Room 'studio-1' deleted (empty)
+[WebRtcOutputStream] Sent 250 frames (5 sec)
+[WebRtcPeer] Connection state: Disconnected
+Disconnected - recreating peer...
+[SignalingServer] Client 6 connected from 127.0.0.1:65081 to room 'studio-1'
+[SignalingServer] Room 'studio-1' now has 1 client(s)
+[WebRtcPeer] RTP read error: [WebRtcPeer] Connection state: Closed
+DataChannel is not opened
+[SignalingServer] Client 7 connected from 127.0.0.1:65097 to room 'studio-1'
+[SignalingServer] Room 'studio-1' now has 2 client(s)
+[WebRtcPeer] Connected to signaling server: ws://localhost:8080/studio-1 (room: 'studio-1')
+[WebRtcPeer] Received offer
+[WebRtcPeer] Sent answer
+[WebRtcPeer] Connection state: Connected
+Connected!
+[BASS_WEBRTC_PeerSetupStreams] source_channel=2147483650
+[BASS_WEBRTC_PeerSetupStreams] Creating output stream...
+[BASS_WEBRTC_PeerSetupStreams] Output stream started successfully
+[WebRtcOutputStream] TX thread started, sending audio...
+[WebRtcPeer] WebRTC connected, signaling complete
+[SignalingServer] Client 7 left room 'studio-1', 1 client(s) remaining
+[WebRtcOutputStream] Sent 250 frames (5 sec)
+[SignalingServer] Client 6 left room 'studio-1', 0 client(s) remaining
+[SignalingServer] Room 'studio-1' deleted (empty)
+
+----------------------------
+----------------------------
+test_client_websocket.html
+

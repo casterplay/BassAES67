@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BASS WebRTC Bidirectional Client</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { color: #333; margin-bottom: 5px; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h2 { margin-top: 0; color: #444; font-size: 1.2em; }
+        .form-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .form-row label { min-width: 100px; color: #555; }
+        .form-row input[type="text"],
+        .form-row input[type="number"],
+        .form-row select {
+            flex: 1;
+            min-width: 150px;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .form-row input[type="number"] { max-width: 100px; }
+        .checkbox-group {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: auto;
+            cursor: pointer;
+        }
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+        .btn-group { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: #0066cc; color: white; }
+        .btn-primary:hover:not(:disabled) { background: #0052a3; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-success:hover:not(:disabled) { background: #1e7e34; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover:not(:disabled) { background: #b02a37; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn-secondary:hover:not(:disabled) { background: #545b62; }
+        .status {
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .status-disconnected { background: #f8d7da; color: #721c24; }
+        .status-connecting { background: #fff3cd; color: #856404; }
+        .status-connected { background: #d4edda; color: #155724; }
+        .meter-container { margin-top: 15px; }
+        .meter-label { font-size: 13px; color: #666; margin-bottom: 5px; }
+        .meter {
+            height: 24px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .meter-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #20c997);
+            width: 0%;
+            transition: width 0.1s;
+        }
+        .log-container {
+            background: #1e1e1e;
+            border-radius: 4px;
+            padding: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .log-entry { color: #d4d4d4; }
+        .log-entry.error { color: #f48771; }
+        .log-entry.success { color: #89d185; }
+        .log-entry .time { color: #6a9955; }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+        .info-text { color: #666; font-size: 13px; margin-bottom: 15px; }
+        .section-divider { border-top: 1px solid #eee; margin: 15px 0; padding-top: 15px; }
+    </style>
+</head>
+<body>
+    <h1>BASS WebRTC Bidirectional Client</h1>
+    <p class="subtitle">Enhanced client with stereo support and audio settings</p>
+
+    <!-- Server Settings -->
+    <div class="card">
+        <h2>Server Settings</h2>
+        <div class="form-row">
+            <label>Server Mode:</label>
+            <select id="serverMode" onchange="updateUrlPreview()">
+                <option value="mediamtx">MediaMTX (relay server)</option>
+                <option value="direct">Direct (bass-webrtc server)</option>
+            </select>
+        </div>
+        <div class="form-row">
+            <label>Server URL:</label>
+            <input type="text" id="serverUrl" value="http://localhost:8889" placeholder="http://localhost:8889" oninput="updateUrlPreview()">
+        </div>
+        <div class="form-row">
+            <label>TX Stream:</label>
+            <input type="text" id="txStreamName" value="browser-to-bass" placeholder="stream name for sending" oninput="updateUrlPreview()">
+        </div>
+        <div class="form-row">
+            <label>RX Stream:</label>
+            <input type="text" id="rxStreamName" value="bass-to-browser" placeholder="stream name for receiving" oninput="updateUrlPreview()">
+        </div>
+        <div class="info-text">
+            <strong>WHIP (Send):</strong> <span id="whipUrlPreview">-</span><br>
+            <strong>WHEP (Receive):</strong> <span id="whepUrlPreview">-</span>
+        </div>
+    </div>
+
+    <!-- Audio Settings -->
+    <div class="card">
+        <h2>Audio Settings</h2>
+        <div class="form-row">
+            <label>Microphone:</label>
+            <select id="audioDevice">
+                <option value="">Default</option>
+            </select>
+            <button class="btn-secondary" onclick="refreshDevices()">Refresh</button>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <p class="info-text">Audio processing (disable for better music quality):</p>
+        <div class="checkbox-group">
+            <label><input type="checkbox" id="echoCancellation"> Echo Cancellation</label>
+            <label><input type="checkbox" id="noiseSuppression"> Noise Suppression</label>
+            <label><input type="checkbox" id="autoGainControl"> Auto Gain Control</label>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <div class="form-row">
+            <label>Audio Mode:</label>
+            <select id="audioMode" onchange="updateBitrateFromMode()">
+                <option value="music">Music (Stereo, High Bitrate)</option>
+                <option value="voice">Voice (Mono, Optimized)</option>
+            </select>
+        </div>
+        <div class="form-row">
+            <label>Bitrate:</label>
+            <input type="number" id="bitrate" value="128" min="32" max="256" step="8"> kbps
+        </div>
+    </div>
+
+    <!-- Connection Controls -->
+    <div class="card">
+        <h2>Connection</h2>
+        <div class="btn-group">
+            <button id="bidirectionalBtn" class="btn-success" onclick="connectBidirectional()">Connect Bidirectional</button>
+            <button id="disconnectAllBtn" class="btn-danger" onclick="disconnectAll()" disabled>Disconnect All</button>
+        </div>
+        <div id="mainStatus" class="status status-disconnected">Disconnected</div>
+    </div>
+
+    <!-- WHIP/WHEP Panels -->
+    <div class="two-col">
+        <!-- WHIP: Send audio to server -->
+        <div class="card">
+            <h2>Send Audio (WHIP)</h2>
+            <p class="info-text">Send microphone audio via WHIP. BASS receives via WHEP.</p>
+            <div class="btn-group">
+                <button id="whipConnectBtn" class="btn-primary" onclick="whipConnect()">Connect & Send</button>
+                <button id="whipDisconnectBtn" class="btn-danger" onclick="whipDisconnect()" disabled>Disconnect</button>
+            </div>
+            <div id="whipStatus" class="status status-disconnected">Disconnected</div>
+            <div class="meter-container">
+                <div class="meter-label">Microphone Level</div>
+                <div class="meter"><div id="whipMeter" class="meter-fill"></div></div>
+            </div>
+        </div>
+
+        <!-- WHEP: Receive audio from server -->
+        <div class="card">
+            <h2>Receive Audio (WHEP)</h2>
+            <p class="info-text">Receive audio via WHEP. BASS sends via WHIP.</p>
+            <div class="btn-group">
+                <button id="whepConnectBtn" class="btn-primary" onclick="whepConnect()">Connect & Play</button>
+                <button id="whepDisconnectBtn" class="btn-danger" onclick="whepDisconnect()" disabled>Disconnect</button>
+            </div>
+            <div id="whepStatus" class="status status-disconnected">Disconnected</div>
+            <div class="meter-container">
+                <div class="meter-label">Playback Level</div>
+                <div class="meter"><div id="whepMeter" class="meter-fill"></div></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Log -->
+    <div class="card">
+        <h2>Log</h2>
+        <div id="log" class="log-container"></div>
+    </div>
+
+    <script>
+        // State
+        let whipPc = null;
+        let whipStream = null;
+        let whipResourceUrl = null;
+        let whipAnalyser = null;
+
+        let whepPc = null;
+        let whepResourceUrl = null;
+        let whepAnalyser = null;
+        let audioContext = null;
+
+        // Logging
+        function log(msg, type = '') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry ' + type;
+            entry.innerHTML = `<span class="time">[${time}]</span> ${msg}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(`[${time}] ${msg}`);
+        }
+
+        function setStatus(elementId, text, state) {
+            const el = document.getElementById(elementId);
+            el.textContent = text;
+            el.className = 'status status-' + state;
+        }
+
+        // URL Generation
+        function getServerMode() {
+            return document.getElementById('serverMode').value;
+        }
+
+        function getWhipUrl() {
+            const server = document.getElementById('serverUrl').value.replace(/\/$/, '');
+            const stream = document.getElementById('txStreamName').value;
+            const mode = getServerMode();
+
+            if (mode === 'direct') {
+                return `${server}/whip`;
+            } else {
+                return `${server}/${stream}/whip`;
+            }
+        }
+
+        function getWhepUrl() {
+            const server = document.getElementById('serverUrl').value.replace(/\/$/, '');
+            const stream = document.getElementById('rxStreamName').value;
+            const mode = getServerMode();
+
+            if (mode === 'direct') {
+                return `${server}/whep`;
+            } else {
+                return `${server}/${stream}/whep`;
+            }
+        }
+
+        function updateUrlPreview() {
+            document.getElementById('whipUrlPreview').textContent = getWhipUrl();
+            document.getElementById('whepUrlPreview').textContent = getWhepUrl();
+
+            // Update default port based on mode
+            const mode = getServerMode();
+            const urlInput = document.getElementById('serverUrl');
+            if (mode === 'direct' && urlInput.value.includes(':8889')) {
+                urlInput.value = urlInput.value.replace(':8889', ':8080');
+            } else if (mode === 'mediamtx' && urlInput.value.includes(':8080')) {
+                urlInput.value = urlInput.value.replace(':8080', ':8889');
+            }
+        }
+
+        // Audio Settings
+        function getAudioConstraints() {
+            const deviceId = document.getElementById('audioDevice').value;
+            const echoCancellation = document.getElementById('echoCancellation').checked;
+            const noiseSuppression = document.getElementById('noiseSuppression').checked;
+            const autoGainControl = document.getElementById('autoGainControl').checked;
+            const audioMode = document.getElementById('audioMode').value;
+
+            const constraints = {
+                echoCancellation: echoCancellation,
+                noiseSuppression: noiseSuppression,
+                autoGainControl: autoGainControl,
+                sampleRate: 48000
+            };
+
+            if (deviceId) {
+                constraints.deviceId = deviceId;
+            }
+
+            // Request stereo if in music mode (browser support varies)
+            if (audioMode === 'music') {
+                constraints.channelCount = { ideal: 2 };
+            }
+
+            return constraints;
+        }
+
+        function updateBitrateFromMode() {
+            const mode = document.getElementById('audioMode').value;
+            const bitrateInput = document.getElementById('bitrate');
+
+            if (mode === 'voice') {
+                bitrateInput.value = 64;
+            } else {
+                bitrateInput.value = 128;
+            }
+        }
+
+        // SDP Modification Functions
+        function enableStereoOpus(sdp) {
+            // Find OPUS payload type and add stereo parameters to fmtp line
+            const lines = sdp.split('\r\n');
+            let opusPayloadFormat = '';
+
+            // Find OPUS payload format number
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('a=rtpmap:') && lines[i].toLowerCase().includes('opus/')) {
+                    opusPayloadFormat = lines[i].slice('a=rtpmap:'.length).split(' ')[0];
+                    break;
+                }
+            }
+
+            if (opusPayloadFormat === '') {
+                return sdp;
+            }
+
+            // Modify fmtp line to include stereo
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('a=fmtp:' + opusPayloadFormat + ' ')) {
+                    if (!lines[i].includes('stereo')) {
+                        lines[i] += ';stereo=1';
+                    }
+                    if (!lines[i].includes('sprop-stereo')) {
+                        lines[i] += ';sprop-stereo=1';
+                    }
+                }
+            }
+
+            return lines.join('\r\n');
+        }
+
+        function setAudioBitrate(sdp, bitrateKbps, voiceMode) {
+            // Find OPUS payload type
+            const lines = sdp.split('\r\n');
+            let opusPayloadFormat = '';
+
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('a=rtpmap:') && lines[i].toLowerCase().includes('opus/')) {
+                    opusPayloadFormat = lines[i].slice('a=rtpmap:'.length).split(' ')[0];
+                    break;
+                }
+            }
+
+            if (opusPayloadFormat === '') {
+                return sdp;
+            }
+
+            const maxBitrate = parseInt(bitrateKbps) * 1000;
+
+            // Replace or modify fmtp line
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('a=fmtp:' + opusPayloadFormat + ' ')) {
+                    if (voiceMode) {
+                        lines[i] = 'a=fmtp:' + opusPayloadFormat + ' minptime=10;useinbandfec=1;maxaveragebitrate=' + maxBitrate;
+                    } else {
+                        lines[i] = 'a=fmtp:' + opusPayloadFormat + ' maxplaybackrate=48000;stereo=1;sprop-stereo=1;maxaveragebitrate=' + maxBitrate;
+                    }
+                }
+            }
+
+            return lines.join('\r\n');
+        }
+
+        // Device Enumeration
+        async function refreshDevices() {
+            try {
+                // Request permission first (needed to get device labels)
+                await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioInputs = devices.filter(d => d.kind === 'audioinput');
+
+                const select = document.getElementById('audioDevice');
+                const currentValue = select.value;
+
+                select.innerHTML = '<option value="">Default</option>';
+
+                audioInputs.forEach((device, index) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.textContent = device.label || `Microphone ${index + 1}`;
+                    select.appendChild(option);
+                });
+
+                // Restore selection if still valid
+                if (currentValue) {
+                    select.value = currentValue;
+                }
+
+                log(`Found ${audioInputs.length} audio input device(s)`, 'success');
+            } catch (err) {
+                log(`Failed to enumerate devices: ${err.message}`, 'error');
+            }
+        }
+
+        // WHIP: Send audio
+        async function whipConnect() {
+            try {
+                setStatus('whipStatus', 'Connecting...', 'connecting');
+                log('WHIP: Requesting microphone access...');
+
+                const audioConstraints = getAudioConstraints();
+                log(`WHIP: Audio constraints: ${JSON.stringify(audioConstraints)}`);
+
+                // Get microphone
+                whipStream = await navigator.mediaDevices.getUserMedia({
+                    audio: audioConstraints,
+                    video: false
+                });
+                log('WHIP: Microphone access granted', 'success');
+
+                // Setup audio analyser
+                if (!audioContext) audioContext = new AudioContext({ sampleRate: 48000 });
+                const source = audioContext.createMediaStreamSource(whipStream);
+                whipAnalyser = audioContext.createAnalyser();
+                whipAnalyser.fftSize = 256;
+                source.connect(whipAnalyser);
+
+                // Create peer connection
+                whipPc = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+
+                // Add audio track
+                whipStream.getAudioTracks().forEach(track => {
+                    whipPc.addTrack(track, whipStream);
+                });
+
+                // Connection state
+                whipPc.onconnectionstatechange = () => {
+                    log(`WHIP: Connection state: ${whipPc.connectionState}`);
+                    if (whipPc.connectionState === 'connected') {
+                        setStatus('whipStatus', 'Connected - Sending audio', 'connected');
+                        updateMainStatus();
+                    } else if (whipPc.connectionState === 'failed') {
+                        setStatus('whipStatus', 'Connection failed', 'disconnected');
+                        updateMainStatus();
+                    }
+                };
+
+                // Create offer
+                const offer = await whipPc.createOffer();
+
+                // Modify SDP for bitrate and stereo
+                const bitrateKbps = document.getElementById('bitrate').value;
+                const voiceMode = document.getElementById('audioMode').value === 'voice';
+                let modifiedSdp = setAudioBitrate(offer.sdp, bitrateKbps, voiceMode);
+
+                log(`WHIP: Configured ${voiceMode ? 'voice' : 'music'} mode at ${bitrateKbps} kbps`);
+
+                await whipPc.setLocalDescription({ type: 'offer', sdp: modifiedSdp });
+                await waitForIce(whipPc);
+
+                const whipUrl = getWhipUrl();
+                log(`WHIP: Connecting to ${whipUrl}`);
+
+                const response = await fetch(whipUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/sdp' },
+                    body: whipPc.localDescription.sdp
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}: ${await response.text()}`);
+                }
+
+                whipResourceUrl = response.headers.get('Location');
+                const answerSdp = await response.text();
+                await whipPc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+                log('WHIP: Connected and streaming', 'success');
+                document.getElementById('whipConnectBtn').disabled = true;
+                document.getElementById('whipDisconnectBtn').disabled = false;
+                document.getElementById('disconnectAllBtn').disabled = false;
+
+                updateMeters();
+
+            } catch (err) {
+                log(`WHIP Error: ${err.message}`, 'error');
+                setStatus('whipStatus', 'Error: ' + err.message, 'disconnected');
+                whipDisconnect();
+            }
+        }
+
+        async function whipDisconnect() {
+            log('WHIP: Disconnecting...');
+
+            if (whipResourceUrl) {
+                try {
+                    await fetch(whipResourceUrl, { method: 'DELETE' });
+                } catch (e) {}
+                whipResourceUrl = null;
+            }
+
+            if (whipPc) {
+                whipPc.close();
+                whipPc = null;
+            }
+
+            if (whipStream) {
+                whipStream.getTracks().forEach(t => t.stop());
+                whipStream = null;
+            }
+
+            whipAnalyser = null;
+            setStatus('whipStatus', 'Disconnected', 'disconnected');
+            document.getElementById('whipConnectBtn').disabled = false;
+            document.getElementById('whipDisconnectBtn').disabled = true;
+            document.getElementById('whipMeter').style.width = '0%';
+            updateMainStatus();
+        }
+
+        // WHEP: Receive audio
+        async function whepConnect() {
+            try {
+                setStatus('whepStatus', 'Connecting...', 'connecting');
+
+                if (!audioContext) audioContext = new AudioContext({ sampleRate: 48000 });
+
+                // Create peer connection
+                whepPc = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+
+                // Handle incoming track
+                whepPc.ontrack = (event) => {
+                    log('WHEP: Received audio track', 'success');
+                    const audio = new Audio();
+                    audio.srcObject = event.streams[0];
+                    audio.play().catch(e => log(`WHEP: Autoplay blocked: ${e.message}`, 'error'));
+
+                    // Setup analyser for received audio
+                    const source = audioContext.createMediaStreamSource(event.streams[0]);
+                    whepAnalyser = audioContext.createAnalyser();
+                    whepAnalyser.fftSize = 256;
+                    source.connect(whepAnalyser);
+                };
+
+                // Connection state
+                whepPc.onconnectionstatechange = () => {
+                    log(`WHEP: Connection state: ${whepPc.connectionState}`);
+                    if (whepPc.connectionState === 'connected') {
+                        setStatus('whepStatus', 'Connected - Playing audio', 'connected');
+                        updateMainStatus();
+                    } else if (whepPc.connectionState === 'failed') {
+                        setStatus('whepStatus', 'Connection failed', 'disconnected');
+                        updateMainStatus();
+                    }
+                };
+
+                // Add receive-only transceiver
+                whepPc.addTransceiver('audio', { direction: 'recvonly' });
+
+                // Create offer
+                const offer = await whepPc.createOffer();
+
+                // Modify SDP to request stereo
+                let modifiedSdp = enableStereoOpus(offer.sdp);
+                log('WHEP: Requesting stereo reception');
+
+                await whepPc.setLocalDescription({ type: 'offer', sdp: modifiedSdp });
+                await waitForIce(whepPc);
+
+                const whepUrl = getWhepUrl();
+                log(`WHEP: Connecting to ${whepUrl}`);
+
+                const response = await fetch(whepUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/sdp' },
+                    body: whepPc.localDescription.sdp
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}: ${await response.text()}`);
+                }
+
+                whepResourceUrl = response.headers.get('Location');
+                const answerSdp = await response.text();
+                await whepPc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+                log('WHEP: Connected', 'success');
+                document.getElementById('whepConnectBtn').disabled = true;
+                document.getElementById('whepDisconnectBtn').disabled = false;
+                document.getElementById('disconnectAllBtn').disabled = false;
+
+                updateMeters();
+
+            } catch (err) {
+                log(`WHEP Error: ${err.message}`, 'error');
+                setStatus('whepStatus', 'Error: ' + err.message, 'disconnected');
+                whepDisconnect();
+            }
+        }
+
+        async function whepDisconnect() {
+            log('WHEP: Disconnecting...');
+
+            if (whepResourceUrl) {
+                try {
+                    await fetch(whepResourceUrl, { method: 'DELETE' });
+                } catch (e) {}
+                whepResourceUrl = null;
+            }
+
+            if (whepPc) {
+                whepPc.close();
+                whepPc = null;
+            }
+
+            whepAnalyser = null;
+            setStatus('whepStatus', 'Disconnected', 'disconnected');
+            document.getElementById('whepConnectBtn').disabled = false;
+            document.getElementById('whepDisconnectBtn').disabled = true;
+            document.getElementById('whepMeter').style.width = '0%';
+            updateMainStatus();
+        }
+
+        // Bidirectional
+        async function connectBidirectional() {
+            log('Starting bidirectional connection...');
+            setStatus('mainStatus', 'Connecting...', 'connecting');
+
+            // Connect both WHIP and WHEP
+            await Promise.all([whipConnect(), whepConnect()]);
+        }
+
+        async function disconnectAll() {
+            log('Disconnecting all...');
+            await Promise.all([whipDisconnect(), whepDisconnect()]);
+            document.getElementById('disconnectAllBtn').disabled = true;
+        }
+
+        function updateMainStatus() {
+            const whipConnected = whipPc && whipPc.connectionState === 'connected';
+            const whepConnected = whepPc && whepPc.connectionState === 'connected';
+
+            if (whipConnected && whepConnected) {
+                setStatus('mainStatus', 'Bidirectional - Sending & Receiving', 'connected');
+            } else if (whipConnected) {
+                setStatus('mainStatus', 'Sending audio only', 'connected');
+            } else if (whepConnected) {
+                setStatus('mainStatus', 'Receiving audio only', 'connected');
+            } else {
+                setStatus('mainStatus', 'Disconnected', 'disconnected');
+                document.getElementById('disconnectAllBtn').disabled = true;
+            }
+        }
+
+        // Utilities
+        function waitForIce(pc) {
+            return new Promise(resolve => {
+                if (pc.iceGatheringState === 'complete') {
+                    resolve();
+                } else {
+                    const check = () => {
+                        if (pc.iceGatheringState === 'complete') {
+                            pc.removeEventListener('icegatheringstatechange', check);
+                            resolve();
+                        }
+                    };
+                    pc.addEventListener('icegatheringstatechange', check);
+                    setTimeout(resolve, 3000); // Timeout fallback
+                }
+            });
+        }
+
+        function updateMeters() {
+            if (whipAnalyser) {
+                const data = new Uint8Array(whipAnalyser.frequencyBinCount);
+                whipAnalyser.getByteFrequencyData(data);
+                const avg = data.reduce((a, b) => a + b, 0) / data.length;
+                document.getElementById('whipMeter').style.width = Math.min(100, avg) + '%';
+            }
+
+            if (whepAnalyser) {
+                const data = new Uint8Array(whepAnalyser.frequencyBinCount);
+                whepAnalyser.getByteFrequencyData(data);
+                const avg = data.reduce((a, b) => a + b, 0) / data.length;
+                document.getElementById('whepMeter').style.width = Math.min(100, avg) + '%';
+            }
+
+            if (whipAnalyser || whepAnalyser) {
+                requestAnimationFrame(updateMeters);
+            }
+        }
+
+        // Initialize
+        window.onload = function() {
+            updateUrlPreview();
+            refreshDevices();
+            log('Ready. Configure settings and click Connect.');
+        };
+    </script>
+</body>
+</html>
