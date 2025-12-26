@@ -1,0 +1,191 @@
+Via Web client + mediamtx
+
+
+
+-----------------
+AUDIO ENABLED
+-----------------
+
+========================================
+  WebRTC to NDI Receiver
+========================================
+
+WHEP URL:      http://localhost:8889/nditest/whep
+NDI Name:      OBS via WebRTC
+Audio to NDI:  false
+
+[FFmpeg Video] Libraries loaded successfully
+[OK] FFmpeg video libraries available
+
+Connecting to WHEP endpoint...
+WhepNdiClient: Created NDI sender 'OBS via WebRTC' (audio_to_ndi=false)
+WhepNdiClient: Adding video transceiver (recvonly)
+WhepNdiClient: Video transceiver added successfully
+WhepNdiClient: ICE gathering state: Gathering
+WhepNdiClient: ICE candidate: udp host 192.168.240.1:51802
+WhepNdiClient: ICE candidate: udp host 192.168.50.102:51803
+WhepNdiClient: ICE candidate: udp host 192.168.60.102:51804
+WhepNdiClient: ICE candidate: udp srflx 171.4.0.128:518060.0.0.0
+WhepNdiClient: ICE candidate: udp srflx 171.4.0.128:518050.0.0.0
+WhepNdiClient: ICE gathering state: Complete
+WhepNdiClient: ICE gathering complete
+WhepNdiClient: SDP offer - video m-line: true, H264: true, VP8: true, VP9: true, ICE candidates: 10
+WhepNdiClient: Offer m-line: m=audio 9 UDP/TLS/RTP/SAVPF 111 9 0 8
+WhepNdiClient: Offer m-line: m=video 9 UDP/TLS/RTP/SAVPF 96 98 100 102 127 125 108 123 41 116
+WhepNdiClient: Offer ICE: a=candidate:2078089754 1 udp 2130706431 192.168.240.1 51802 typ host
+WhepNdiClient: Offer ICE: a=candidate:2078089754 2 udp 2130706431 192.168.240.1 51802 typ host
+WhepNdiClient: Offer ICE: a=candidate:3659225647 1 udp 2130706431 192.168.50.102 51803 typ host
+WhepNdiClient: Offer ICE: a=candidate:3659225647 2 udp 2130706431 192.168.50.102 51803 typ host
+WhepNdiClient: Offer ICE: a=candidate:2181931057 1 udp 2130706431 192.168.60.102 51804 typ host
+WhepNdiClient: Offer ICE: a=candidate:2181931057 2 udp 2130706431 192.168.60.102 51804 typ host
+WhepNdiClient: Offer ICE: a=candidate:3206130320 1 udp 1694498815 171.4.0.128 51806 typ srflx raddr 0.0.0.0 rport 51806
+WhepNdiClient: Offer ICE: a=candidate:3206130320 2 udp 1694498815 171.4.0.128 51806 typ srflx raddr 0.0.0.0 rport 51806
+WhepNdiClient: Offer ICE: a=candidate:3206130320 1 udp 1694498815 171.4.0.128 51805 typ srflx raddr 0.0.0.0 rport 51805
+WhepNdiClient: Offer ICE: a=candidate:3206130320 2 udp 1694498815 171.4.0.128 51805 typ srflx raddr 0.0.0.0 rport 51805
+WhepNdiClient: Sending offer to http://localhost:8889/nditest/whep
+WhepNdiClient: SDP answer - audio: true, video: true, video active: true
+WhepNdiClient: SDP answer line: m=audio 9 UDP/TLS/RTP/SAVPF 111
+WhepNdiClient: SDP answer line: a=mid:0
+WhepNdiClient: SDP answer line: a=rtpmap:111 opus/48000/2
+WhepNdiClient: SDP answer line: a=sendonly
+WhepNdiClient: SDP answer line: m=video 9 UDP/TLS/RTP/SAVPF 125
+WhepNdiClient: SDP answer line: a=mid:1
+WhepNdiClient: SDP answer line: a=rtpmap:125 H264/90000
+WhepNdiClient: SDP answer line: a=sendonly
+WhepNdiClient: SDP answer ICE candidates: 8
+WhepNdiClient: Answer ICE: a=candidate:2366715472 1 udp 2130706431 192.168.50.102 8189 typ host ufrag OshAuySKEYuhHqzX
+WhepNdiClient: Answer ICE: a=candidate:2366715472 2 udp 2130706431 192.168.50.102 8189 typ host ufrag OshAuySKEYuhHqzX
+WhepNdiClient: Answer ICE: a=candidate:1713802579 1 udp 2130706431 192.168.60.102 8189 typ host ufrag OshAuySKEYuhHqzX
+WhepNdiClient: Answer ICE: a=candidate:1713802579 2 udp 2130706431 192.168.60.102 8189 typ host ufrag OshAuySKEYuhHqzX
+WhepNdiClient: Answer ICE: a=candidate:2878742611 1 udp 2130706431 127.0.0.1 8189 typ host ufrag OshAuySKEYuhHqzX
+WhepNdiClient: Answer ICE: a=candidate:2878742611 2 udp 2130706431 127.0.0.1 8189 typ host ufrag OshAuySKEYuhHqzX
+WhepNdiClient: Answer ICE: a=candidate:1245918028 1 udp 2130706431 192.168.240.1 8189 typ host ufrag OshAuySKEYuhHqzX
+WhepNdiClient: Answer ICE: a=candidate:1245918028 2 udp 2130706431 192.168.240.1 8189 typ host ufrag OshAuySKEYuhHqzX
+WhepNdiClient: Connected to WHEP endpoint
+WhepNdiClient: 2 transceivers configured:
+WhepNdiClient: ICE connection state: Checking
+  [0] kind=Audio, direction=Recvonly, current=Recvonly, mid=Some("0"), receiver_tracks=none
+  [1] kind=Video, direction=Recvonly, current=Recvonly, mid=Some("1"), receiver_tracks=none
+WhepNdiClient: Waiting for media tracks (expected: audio + video)
+WhepNdiClient: ICE connection state: Connected
+WhepNdiClient: Peer connection state: Connected
+WhepNdiClient: on_track - mime_type=audio/opus, ssrc=1004256431
+WhepNdiClient: Starting audio track reader (audio_to_ndi=false)
+WhepNdiClient: Checking transceivers for missing tracks (callback got: audio=true, video=false)
+WhepNdiClient: Found video track on receiver (on_track didn't fire): mime=video/h264, ssrc=633272762
+WhepNdiClient: Track setup complete - audio: true, video: true
+WhepNdiClient: Starting video track reader (codec=H264)
+[OK] Connected to WHEP endpoint
+
+Receiving media... Press Ctrl+C to stop.
+
+Open NDI Studio Monitor to view the video output.
+
+WhepNdiClient: Created H264 video decoder
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+WhepNdiClient: Video decode error: DecodeError("Invalid data found when processing input")
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[h264 @ 00000215744e2c00] non-existing PPS 0 referenced
+[h264 @ 00000215744e2c00] no frame!
+[VideoDecoder] Initialized 1280x720 (format 0)
+Video: 31 decoded (31 fps), 30 sent to NDI | Audio: 142 packets (142/s), 0 to NDI | NDI Receivers: 2
+Video: 61 decoded (30 fps), 60 sent to NDI | Audio: 193 packets (51/s), 0 to NDI | NDI Receivers: 2
+Video: 91 decoded (30 fps), 90 sent to NDI | Audio: 243 packets (50/s), 0 to NDI | NDI Receivers: 2
+Video: 121 decoded (30 fps), 120 sent to NDI | Audio: 292 packets (49/s), 0 to NDI | NDI Receivers: 2
+Video: 151 decoded (30 fps), 150 sent to NDI | Audio: 342 packets (50/s), 0 to NDI | NDI Receivers: 2
+Video: 181 decoded (30 fps), 180 sent to NDI | Audio: 392 packets (50/s), 0 to NDI | NDI Receivers: 2
+Video: 211 decoded (30 fps), 210 sent to NDI | Audio: 443 packets (51/s), 0 to NDI | NDI Receivers: 2
+
+Received Ctrl+C, shutting down...
+Video: 241 decoded (30 fps), 240 sent to NDI | Audio: 493 packets (50/s), 0 to NDI | NDI Receivers: 2
+
+Disconnecting...
+WhepNdiClient: Audio track reader stopped
+WhepNdiClient: ICE gathering state: Closed
+WhepNdiClient: on_track - mime_type=video/h264, ssrc=633272762
+WhepNdiClient: Peer connection state: Closed
+WhepNdiClient: ICE connection state: Closed
+[OK] Disconnected
+WhepNdiClient: Starting video track reader (codec=H264)
+WhepNdiClient: Video track reader stopped
+WhepNdiClient: Video track reader stopped

@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BASS WebRTC-NDI Test Client - Video + Audio</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { color: #333; margin-bottom: 5px; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h2 { margin-top: 0; color: #444; font-size: 1.2em; }
+        .form-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            align-items: center;
+        }
+        .form-row label { min-width: 100px; color: #555; }
+        .form-row input[type="text"] {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .form-row input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            user-select: none;
+        }
+        .btn-group { display: flex; gap: 10px; margin-top: 15px; }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: #0066cc; color: white; }
+        .btn-primary:hover:not(:disabled) { background: #0052a3; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover:not(:disabled) { background: #b02a37; }
+        .status {
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .status-disconnected { background: #f8d7da; color: #721c24; }
+        .status-connecting { background: #fff3cd; color: #856404; }
+        .status-connected { background: #d4edda; color: #155724; }
+        .video-container {
+            margin-top: 15px;
+            background: #000;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        video {
+            width: 100%;
+            max-height: 400px;
+            display: block;
+        }
+        .meter-container { margin-top: 15px; }
+        .meter-label { font-size: 13px; color: #666; margin-bottom: 5px; }
+        .meter {
+            height: 24px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .meter-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #20c997);
+            width: 0%;
+            transition: width 0.1s;
+        }
+        .log-container {
+            background: #1e1e1e;
+            border-radius: 4px;
+            padding: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .log-entry { color: #d4d4d4; }
+        .log-entry.error { color: #f48771; }
+        .log-entry.success { color: #89d185; }
+        .log-entry .time { color: #6a9955; }
+        .info-box {
+            background: #e7f3ff;
+            border: 1px solid #b6d4fe;
+            border-radius: 4px;
+            padding: 12px;
+            margin-bottom: 15px;
+            font-size: 13px;
+            color: #084298;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .stat-item {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #0066cc;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>BASS WebRTC-NDI Test Client</h1>
+    <p class="subtitle">Send Video + Audio to MediaMTX via WHIP for bass-webrtc-ndi testing</p>
+
+    <div class="info-box">
+        <strong>Instructions:</strong> This client sends video (and optionally audio) to MediaMTX via WHIP.
+        Run bass-webrtc-ndi's webrtc_ndi_receiver to receive the video via WHEP and output to NDI.
+    </div>
+
+    <div class="card">
+        <h2>MediaMTX Server Settings</h2>
+        <div class="form-row">
+            <label>Server URL:</label>
+            <input type="text" id="serverUrl" value="http://localhost:8889" placeholder="http://localhost:8889">
+        </div>
+        <div class="form-row">
+            <label>Stream Name:</label>
+            <input type="text" id="streamName" value="nditest" placeholder="nditest">
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Send Video + Audio (WHIP)</h2>
+        <p style="color: #666; font-size: 13px;">Send webcam video (and optionally microphone audio) to MediaMTX.</p>
+
+        <div class="form-row">
+            <label class="checkbox-label">
+                <input type="checkbox" id="sendAudio" checked>
+                <span>Send Audio (microphone)</span>
+            </label>
+        </div>
+
+        <div class="form-row">
+            <label>Video Codec:</label>
+            <select id="videoCodec" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd;">
+                <option value="h264" selected>H.264 (recommended)</option>
+                <option value="vp8">VP8</option>
+                <option value="vp9">VP9</option>
+            </select>
+        </div>
+
+        <div class="btn-group">
+            <button id="whipConnectBtn" class="btn-primary" onclick="whipConnect()">Connect & Send</button>
+            <button id="whipDisconnectBtn" class="btn-danger" onclick="whipDisconnect()" disabled>Disconnect</button>
+        </div>
+
+        <div id="whipStatus" class="status status-disconnected">Disconnected</div>
+
+        <div class="video-container">
+            <video id="localVideo" autoplay muted playsinline></video>
+        </div>
+
+        <div class="meter-container" id="audioMeterContainer" style="display: none;">
+            <div class="meter-label">Microphone Level</div>
+            <div class="meter"><div id="whipMeter" class="meter-fill"></div></div>
+        </div>
+
+        <div class="stats" id="statsContainer" style="display: none;">
+            <div class="stat-item">
+                <div class="stat-value" id="statFps">0</div>
+                <div class="stat-label">FPS</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="statBitrate">0</div>
+                <div class="stat-label">kbps</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="statResolution">-</div>
+                <div class="stat-label">Resolution</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Log</h2>
+        <div id="log" class="log-container"></div>
+    </div>
+
+    <script>
+        // State
+        let whipPc = null;
+        let whipStream = null;
+        let whipResourceUrl = null;
+        let whipAnalyser = null;
+        let audioContext = null;
+        let statsInterval = null;
+        let lastBytesSent = 0;
+        let lastStatsTime = 0;
+
+        function log(msg, type = '') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry ' + type;
+            entry.innerHTML = `<span class="time">[${time}]</span> ${msg}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(`[${time}] ${msg}`);
+        }
+
+        function setStatus(elementId, text, state) {
+            const el = document.getElementById(elementId);
+            el.textContent = text;
+            el.className = 'status status-' + state;
+        }
+
+        function getWhipUrl() {
+            const server = document.getElementById('serverUrl').value.replace(/\/$/, '');
+            const stream = document.getElementById('streamName').value;
+            return `${server}/${stream}/whip`;
+        }
+
+        // Preferred codecs based on selection
+        function getPreferredCodecs() {
+            const codec = document.getElementById('videoCodec').value;
+            const codecs = RTCRtpSender.getCapabilities('video').codecs;
+
+            let preferred = [];
+            let others = [];
+
+            for (const c of codecs) {
+                const mime = c.mimeType.toLowerCase();
+                if (codec === 'h264' && mime.includes('h264')) {
+                    preferred.push(c);
+                } else if (codec === 'vp8' && mime.includes('vp8')) {
+                    preferred.push(c);
+                } else if (codec === 'vp9' && mime.includes('vp9')) {
+                    preferred.push(c);
+                } else {
+                    others.push(c);
+                }
+            }
+
+            return [...preferred, ...others];
+        }
+
+        // WHIP: Send video + audio
+        async function whipConnect() {
+            try {
+                const sendAudio = document.getElementById('sendAudio').checked;
+
+                setStatus('whipStatus', 'Connecting...', 'connecting');
+                log(`WHIP: Requesting camera${sendAudio ? ' + microphone' : ''} access...`);
+
+                // Get media
+                const constraints = {
+                    video: {
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                        frameRate: { ideal: 30 }
+                    },
+                    audio: sendAudio ? {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        sampleRate: 48000
+                    } : false
+                };
+
+                whipStream = await navigator.mediaDevices.getUserMedia(constraints);
+                log(`WHIP: Media access granted (video${sendAudio ? ' + audio' : ''})`, 'success');
+
+                // Show local video preview
+                document.getElementById('localVideo').srcObject = whipStream;
+
+                // Setup audio analyser if audio is enabled
+                if (sendAudio) {
+                    if (!audioContext) audioContext = new AudioContext({ sampleRate: 48000 });
+                    const source = audioContext.createMediaStreamSource(whipStream);
+                    whipAnalyser = audioContext.createAnalyser();
+                    whipAnalyser.fftSize = 256;
+                    source.connect(whipAnalyser);
+                    document.getElementById('audioMeterContainer').style.display = 'block';
+                }
+
+                // Create peer connection
+                whipPc = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+
+                // Add video track
+                const videoTrack = whipStream.getVideoTracks()[0];
+                const videoSender = whipPc.addTrack(videoTrack, whipStream);
+                log(`WHIP: Added video track: ${videoTrack.label}`);
+
+                // Set preferred video codec
+                try {
+                    const preferredCodecs = getPreferredCodecs();
+                    const transceiver = whipPc.getTransceivers().find(t => t.sender === videoSender);
+                    if (transceiver && preferredCodecs.length > 0) {
+                        transceiver.setCodecPreferences(preferredCodecs);
+                        log(`WHIP: Set preferred codec: ${document.getElementById('videoCodec').value.toUpperCase()}`);
+                    }
+                } catch (e) {
+                    log(`WHIP: Could not set codec preference: ${e.message}`);
+                }
+
+                // Add audio track if enabled
+                if (sendAudio) {
+                    whipStream.getAudioTracks().forEach(track => {
+                        whipPc.addTrack(track, whipStream);
+                        log(`WHIP: Added audio track: ${track.label}`);
+                    });
+                }
+
+                // Connection state
+                whipPc.onconnectionstatechange = () => {
+                    log(`WHIP: Connection state: ${whipPc.connectionState}`);
+                    if (whipPc.connectionState === 'connected') {
+                        setStatus('whipStatus', `Connected - Sending video${sendAudio ? ' + audio' : ''}`, 'connected');
+                        startStats();
+                    } else if (whipPc.connectionState === 'failed') {
+                        setStatus('whipStatus', 'Connection failed', 'disconnected');
+                    }
+                };
+
+                // ICE candidate logging
+                whipPc.onicecandidate = (e) => {
+                    if (e.candidate) {
+                        log(`WHIP: ICE candidate: ${e.candidate.candidate.split(' ').slice(0, 5).join(' ')}...`);
+                    }
+                };
+
+                // Create and send offer
+                const offer = await whipPc.createOffer();
+                await whipPc.setLocalDescription(offer);
+
+                log('WHIP: Waiting for ICE gathering...');
+                await waitForIce(whipPc);
+                log('WHIP: ICE gathering complete');
+
+                const whipUrl = getWhipUrl();
+                log(`WHIP: Sending offer to ${whipUrl}`);
+
+                // Log SDP info
+                const sdp = whipPc.localDescription.sdp;
+                const hasH264 = sdp.toLowerCase().includes('h264');
+                const hasVP8 = sdp.toLowerCase().includes('vp8');
+                const hasVP9 = sdp.toLowerCase().includes('vp9');
+                const hasOpus = sdp.toLowerCase().includes('opus');
+                log(`WHIP: SDP codecs - H264:${hasH264} VP8:${hasVP8} VP9:${hasVP9} OPUS:${hasOpus}`);
+
+                const response = await fetch(whipUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/sdp' },
+                    body: whipPc.localDescription.sdp
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server returned ${response.status}: ${errorText}`);
+                }
+
+                whipResourceUrl = response.headers.get('Location');
+                const answerSdp = await response.text();
+
+                // Log answer codec info
+                const answerHasH264 = answerSdp.toLowerCase().includes('h264');
+                const answerHasVP8 = answerSdp.toLowerCase().includes('vp8');
+                const answerHasVP9 = answerSdp.toLowerCase().includes('vp9');
+                log(`WHIP: Answer codecs - H264:${answerHasH264} VP8:${answerHasVP8} VP9:${answerHasVP9}`);
+
+                await whipPc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+                log('WHIP: Connected and streaming', 'success');
+                document.getElementById('whipConnectBtn').disabled = true;
+                document.getElementById('whipDisconnectBtn').disabled = false;
+                document.getElementById('statsContainer').style.display = 'grid';
+
+                updateMeters();
+
+            } catch (err) {
+                log(`WHIP Error: ${err.message}`, 'error');
+                setStatus('whipStatus', 'Error: ' + err.message, 'disconnected');
+                whipDisconnect();
+            }
+        }
+
+        async function whipDisconnect() {
+            log('WHIP: Disconnecting...');
+
+            if (statsInterval) {
+                clearInterval(statsInterval);
+                statsInterval = null;
+            }
+
+            if (whipResourceUrl) {
+                try {
+                    await fetch(whipResourceUrl, { method: 'DELETE' });
+                } catch (e) {}
+                whipResourceUrl = null;
+            }
+
+            if (whipPc) {
+                whipPc.close();
+                whipPc = null;
+            }
+
+            if (whipStream) {
+                whipStream.getTracks().forEach(t => t.stop());
+                whipStream = null;
+            }
+
+            whipAnalyser = null;
+            document.getElementById('localVideo').srcObject = null;
+            setStatus('whipStatus', 'Disconnected', 'disconnected');
+            document.getElementById('whipConnectBtn').disabled = false;
+            document.getElementById('whipDisconnectBtn').disabled = true;
+            document.getElementById('whipMeter').style.width = '0%';
+            document.getElementById('audioMeterContainer').style.display = 'none';
+            document.getElementById('statsContainer').style.display = 'none';
+        }
+
+        // Stats
+        function startStats() {
+            lastBytesSent = 0;
+            lastStatsTime = performance.now();
+
+            statsInterval = setInterval(async () => {
+                if (!whipPc) return;
+
+                const stats = await whipPc.getStats();
+                let videoStats = null;
+                let audioStats = null;
+
+                stats.forEach(report => {
+                    if (report.type === 'outbound-rtp') {
+                        if (report.kind === 'video') {
+                            videoStats = report;
+                        } else if (report.kind === 'audio') {
+                            audioStats = report;
+                        }
+                    }
+                });
+
+                if (videoStats) {
+                    // FPS
+                    document.getElementById('statFps').textContent = videoStats.framesPerSecond || 0;
+
+                    // Bitrate
+                    const now = performance.now();
+                    const elapsed = (now - lastStatsTime) / 1000;
+                    const bytesSent = videoStats.bytesSent || 0;
+                    const bitrate = ((bytesSent - lastBytesSent) * 8 / elapsed / 1000).toFixed(0);
+                    document.getElementById('statBitrate').textContent = bitrate;
+                    lastBytesSent = bytesSent;
+                    lastStatsTime = now;
+
+                    // Resolution
+                    if (videoStats.frameWidth && videoStats.frameHeight) {
+                        document.getElementById('statResolution').textContent =
+                            `${videoStats.frameWidth}x${videoStats.frameHeight}`;
+                    }
+                }
+            }, 1000);
+        }
+
+        // Utilities
+        function waitForIce(pc) {
+            return new Promise(resolve => {
+                if (pc.iceGatheringState === 'complete') {
+                    resolve();
+                } else {
+                    const check = () => {
+                        if (pc.iceGatheringState === 'complete') {
+                            pc.removeEventListener('icegatheringstatechange', check);
+                            resolve();
+                        }
+                    };
+                    pc.addEventListener('icegatheringstatechange', check);
+                    setTimeout(resolve, 3000); // Timeout fallback
+                }
+            });
+        }
+
+        function updateMeters() {
+            if (whipAnalyser) {
+                const data = new Uint8Array(whipAnalyser.frequencyBinCount);
+                whipAnalyser.getByteFrequencyData(data);
+                const avg = data.reduce((a, b) => a + b, 0) / data.length;
+                document.getElementById('whipMeter').style.width = Math.min(100, avg) + '%';
+            }
+
+            if (whipAnalyser) {
+                requestAnimationFrame(updateMeters);
+            }
+        }
+
+        // Initialize
+        log('Ready. Configure settings and click Connect.');
+        log('Note: Uncheck "Send Audio" to test video-only mode.');
+    </script>
+</body>
+</html>

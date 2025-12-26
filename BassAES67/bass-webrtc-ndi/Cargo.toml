@@ -2,7 +2,7 @@
 name = "bass-webrtc-ndi"
 version = "0.1.0"
 edition = "2021"
-description = "WebRTC to NDI video/audio bridge for BASS"
+description = "WebRTC to NDI video/audio bridge for BASS - includes all bass-webrtc functionality plus video via NDI"
 authors = ["Kennet"]
 
 [lib]
@@ -12,8 +12,38 @@ crate-type = ["cdylib", "rlib"]
 # NDI SDK bindings
 grafton-ndi = "0.9"
 
-# Async runtime (matching bass-webrtc)
+# WebRTC - pure Rust implementation (from bass-webrtc)
+webrtc = "0.11"
+
+# Async runtime (required by webrtc-rs)
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+# Lock-free ring buffer (same as bass-webrtc)
+ringbuf = "0.4"
+
+# HTTP server for WHIP/WHEP and client for MediaMTX
+hyper = { version = "1", features = ["server", "http1", "client"] }
+hyper-util = { version = "0.1", features = ["tokio", "client", "client-legacy"] }
+http-body-util = "0.1"
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "webpki-roots"] }
+url = "2"
+
+# Bytes handling (used by webrtc-rs)
+bytes = "1"
+
+# Fast mutex (non-audio path only)
+parking_lot = "0.12"
+
+# Lazy initialization
+lazy_static = "1.4"
+
+# WebSocket for signaling server
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
+# JSON for signaling messages
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Logging
 log = "0.4"
@@ -22,5 +52,20 @@ env_logger = "0.11"
 # Error handling
 thiserror = "1.0"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 ctrlc = "3.4"
+
+[[example]]
+name = "ndi_test_pattern"
+path = "examples/ndi_test_pattern.rs"
+
+[[example]]
+name = "webrtc_ndi_receiver"
+path = "examples/webrtc_ndi_receiver.rs"

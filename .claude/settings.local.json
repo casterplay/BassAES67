@@ -10,7 +10,8 @@
       "Bash(cargo test:*)",
       "Bash(cat:*)",
       "Bash(dir \"C:\\\\Dev\\\\CasterPlay2025\\\\BassAES67\\\\BassAES67\\\\bass-rtp\\\\examples\")",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(copy:*)"
     ]
   }
 }
