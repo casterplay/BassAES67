@@ -83,6 +83,12 @@ pub struct MultibandAtomicStats {
     pub underruns: AtomicU64,
     /// Last processing time in microseconds
     pub process_time_us: AtomicU64,
+    /// LUFS momentary loudness * 100 (Phase 3 - LUFS metering)
+    pub lufs_momentary_x100: AtomicI32,
+    /// LUFS short-term loudness * 100
+    pub lufs_short_x100: AtomicI32,
+    /// LUFS integrated loudness * 100
+    pub lufs_integrated_x100: AtomicI32,
 }
 
 impl MultibandAtomicStats {
@@ -101,6 +107,9 @@ impl MultibandAtomicStats {
             agc_gr_x100: AtomicI32::new(0),
             underruns: AtomicU64::new(0),
             process_time_us: AtomicU64::new(0),
+            lufs_momentary_x100: AtomicI32::new(-10000), // -100.0 LUFS
+            lufs_short_x100: AtomicI32::new(-10000),
+            lufs_integrated_x100: AtomicI32::new(-10000),
         }
     }
 
@@ -129,6 +138,14 @@ pub struct MultibandStatsHeader {
     pub underruns: u64,
     /// Last processing time in microseconds
     pub process_time_us: u64,
+    /// Momentary loudness (LUFS, 400ms window) - Phase 3
+    pub lufs_momentary: f32,
+    /// Short-term loudness (LUFS, 3s window)
+    pub lufs_short_term: f32,
+    /// Integrated loudness (LUFS, gated)
+    pub lufs_integrated: f32,
+    /// Padding for alignment
+    pub _pad: u32,
 }
 
 impl Default for MultibandStatsHeader {
@@ -141,6 +158,10 @@ impl Default for MultibandStatsHeader {
             agc_gr_db: 0.0,
             underruns: 0,
             process_time_us: 0,
+            lufs_momentary: -100.0,
+            lufs_short_term: -100.0,
+            lufs_integrated: -100.0,
+            _pad: 0,
         }
     }
 }

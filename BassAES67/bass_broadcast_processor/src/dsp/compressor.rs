@@ -1,8 +1,15 @@
-//! Audio compressor with envelope follower.
+//! Audio compressor with envelope follower and optional lookahead.
 
 use super::gain::{db_to_linear, linear_to_db};
 
-/// Per-band compressor with peak envelope follower.
+/// Maximum lookahead in samples (10ms at 48kHz = 480 samples)
+const MAX_LOOKAHEAD_SAMPLES: usize = 512;
+
+/// Per-band compressor with peak envelope follower and optional lookahead.
+///
+/// Lookahead delays the audio signal while computing gain reduction ahead of time,
+/// allowing the compressor to respond to transients before they arrive. This provides
+/// transparent limiting without distortion on fast transients.
 pub struct Compressor {
     /// Threshold in linear
     threshold: f32,
@@ -22,6 +29,16 @@ pub struct Compressor {
     gain_reduction: f32,
     /// Sample rate (cached for parameter updates)
     sample_rate: f32,
+    /// Lookahead enabled flag
+    lookahead_enabled: bool,
+    /// Lookahead delay in samples
+    lookahead_samples: usize,
+    /// Delay buffer for left channel
+    delay_buffer_l: [f32; MAX_LOOKAHEAD_SAMPLES],
+    /// Delay buffer for right channel
+    delay_buffer_r: [f32; MAX_LOOKAHEAD_SAMPLES],
+    /// Delay buffer write position
+    delay_pos: usize,
 }
 
 impl Compressor {
@@ -56,16 +73,54 @@ impl Compressor {
             envelope: [0.0; 2],
             gain_reduction: 1.0,
             sample_rate,
+            lookahead_enabled: false,
+            lookahead_samples: 0,
+            delay_buffer_l: [0.0; MAX_LOOKAHEAD_SAMPLES],
+            delay_buffer_r: [0.0; MAX_LOOKAHEAD_SAMPLES],
+            delay_pos: 0,
         }
+    }
+
+    /// Enable or disable lookahead.
+    ///
+    /// # Arguments
+    /// * `enabled` - Whether lookahead is enabled
+    /// * `lookahead_ms` - Lookahead time in milliseconds (0.0 to 10.0)
+    pub fn set_lookahead(&mut self, enabled: bool, lookahead_ms: f32) {
+        self.lookahead_enabled = enabled;
+        if enabled {
+            // Convert ms to samples, clamp to max
+            let samples = (lookahead_ms * self.sample_rate / 1000.0) as usize;
+            self.lookahead_samples = samples.min(MAX_LOOKAHEAD_SAMPLES - 1);
+        } else {
+            self.lookahead_samples = 0;
+        }
+    }
+
+    /// Get current lookahead in milliseconds.
+    pub fn lookahead_ms(&self) -> f32 {
+        if self.lookahead_enabled {
+            self.lookahead_samples as f32 * 1000.0 / self.sample_rate
+        } else {
+            0.0
+        }
+    }
+
+    /// Check if lookahead is enabled.
+    pub fn is_lookahead_enabled(&self) -> bool {
+        self.lookahead_enabled
     }
 
     /// Process a single sample.
     /// Returns the compressed sample.
+    ///
+    /// When lookahead is enabled, the audio is delayed while gain reduction
+    /// is computed from the undelayed signal, allowing transparent limiting.
     #[inline]
     pub fn process(&mut self, input: f32, channel: usize) -> f32 {
         let input_abs = input.abs();
 
-        // Peak envelope follower
+        // Peak envelope follower (always uses undelayed input for detection)
         let env = &mut self.envelope[channel];
         if input_abs > *env {
             // Attack: envelope rising
@@ -92,7 +147,33 @@ impl Compressor {
             self.gain_reduction = gain;
         }
 
-        input * gain * self.makeup_gain
+        // If lookahead is enabled, delay the audio signal
+        let output_sample = if self.lookahead_enabled && self.lookahead_samples > 0 {
+            // Get the delayed sample from the buffer
+            let read_pos = (self.delay_pos + MAX_LOOKAHEAD_SAMPLES - self.lookahead_samples)
+                % MAX_LOOKAHEAD_SAMPLES;
+
+            let delayed = if channel == 0 {
+                let out = self.delay_buffer_l[read_pos];
+                self.delay_buffer_l[self.delay_pos] = input;
+                out
+            } else {
+                let out = self.delay_buffer_r[read_pos];
+                self.delay_buffer_r[self.delay_pos] = input;
+                out
+            };
+
+            // Advance write position (only once per stereo pair, on channel 1)
+            if channel == 1 {
+                self.delay_pos = (self.delay_pos + 1) % MAX_LOOKAHEAD_SAMPLES;
+            }
+
+            delayed
+        } else {
+            input
+        };
+
+        output_sample * gain * self.makeup_gain
     }
 
     /// Get current gain reduction in dB (for metering).
@@ -118,9 +199,12 @@ impl Compressor {
         self.makeup_gain = db_to_linear(makeup_gain_db);
     }
 
-    /// Reset envelope state (for discontinuities).
+    /// Reset envelope state and delay buffers (for discontinuities).
     pub fn reset(&mut self) {
         self.envelope = [0.0; 2];
         self.gain_reduction = 1.0;
+        self.delay_buffer_l = [0.0; MAX_LOOKAHEAD_SAMPLES];
+        self.delay_buffer_r = [0.0; MAX_LOOKAHEAD_SAMPLES];
+        self.delay_pos = 0;
     }
 }

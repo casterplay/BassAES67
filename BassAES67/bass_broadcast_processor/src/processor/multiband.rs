@@ -6,10 +6,14 @@ use std::sync::Arc;
 use crate::dsp::agc::{ThreeStageAGC, WidebandAGC};
 use crate::dsp::compressor::Compressor;
 use crate::dsp::gain::{apply_gain, db_to_linear, peak_level};
+use crate::dsp::lufs_meter::LufsMeter;
 use crate::dsp::multiband::MultibandCrossover;
+use crate::dsp::parametric_eq::ParametricEq;
+use crate::dsp::soft_clipper::SoftClipper;
+use crate::dsp::stereo_enhancer::StereoEnhancer;
 use crate::ffi::{BASS_ChannelGetData, BASS_DATA_FLOAT, DWORD};
 
-use super::config::{Agc3StageConfig, AgcConfig, CompressorConfig, MultibandConfig, AGC_MODE_THREE_STAGE};
+use super::config::{Agc3StageConfig, AgcConfig, CompressorConfig, MultibandConfig, ParametricEqConfig, SoftClipperConfig, StereoEnhancerConfig, AGC_MODE_THREE_STAGE};
 use super::stats::{MultibandAtomicStats, MultibandStatsHeader};
 
 /// N-band multiband audio processor.
@@ -27,6 +31,14 @@ pub struct MultibandProcessor {
     crossover: MultibandCrossover,
     /// Per-band compressors
     compressors: Vec<Compressor>,
+    /// Multiband stereo enhancer (Omnia 9 style) - Phase 3.2
+    stereo_enhancer: StereoEnhancer,
+    /// Per-band parametric EQ - Phase 2
+    parametric_eq: ParametricEq,
+    /// Soft clipper with oversampling - Phase 3
+    soft_clipper: SoftClipper,
+    /// LUFS meter (ITU-R BS.1770) - Phase 3
+    lufs_meter: LufsMeter,
     /// Input gain (linear)
     input_gain: f32,
     /// Output gain (linear)
@@ -41,6 +53,8 @@ pub struct MultibandProcessor {
     temp_buffer: Vec<f32>,
     /// Temporary buffer for band samples (per frame)
     band_buffer: Vec<f32>,
+    /// Temporary buffer for band samples (right channel)
+    band_buffer_r: Vec<f32>,
     /// Bypass mode - when true, audio passes through unprocessed
     pub bypass: bool,
 }
@@ -69,20 +83,38 @@ impl MultibandProcessor {
             .bands
             .iter()
             .map(|band_cfg| {
-                Compressor::new(
+                let mut comp = Compressor::new(
                     band_cfg.threshold_db,
                     band_cfg.ratio,
                     band_cfg.attack_ms,
                     band_cfg.release_ms,
                     band_cfg.makeup_gain_db,
                     sample_rate,
-                )
+                );
+                // Enable lookahead if configured (> 0.0)
+                if band_cfg.lookahead_ms > 0.0 {
+                    comp.set_lookahead(true, band_cfg.lookahead_ms);
+                }
+                comp
             })
             .collect();
+
+        // Create stereo enhancer with default broadcast settings
+        let stereo_enhancer = StereoEnhancer::new(sample_rate);
+
+        // Create per-band parametric EQ (default: disabled, flat response)
+        let parametric_eq = ParametricEq::new(sample_rate);
+
+        // Create soft clipper (default: disabled)
+        let soft_clipper = SoftClipper::new(sample_rate);
+
+        // Create LUFS meter for loudness measurement
+        let lufs_meter = LufsMeter::new(sample_rate);
 
         // Pre-allocate buffers
         let temp_buffer = vec![0.0f32; 32768];
         let band_buffer = vec![0.0f32; num_bands];
+        let band_buffer_r = vec![0.0f32; num_bands];
 
         Ok(Self {
             input_gain: db_to_linear(config.header.input_gain_db),
@@ -93,11 +125,16 @@ impl MultibandProcessor {
             agc_use_3stage: false, // Default to single-stage
             crossover,
             compressors,
+            stereo_enhancer,
+            parametric_eq,
+            soft_clipper,
+            lufs_meter,
             stats: Arc::new(MultibandAtomicStats::new(num_bands)),
             source_channel,
             output_handle: 0,
             temp_buffer,
             band_buffer,
+            band_buffer_r,
             bypass: false,
         })
     }
@@ -161,44 +198,111 @@ impl MultibandProcessor {
             // Apply input gain
             apply_gain(&mut self.temp_buffer[..samples_read], self.input_gain);
 
-            // Process each sample: AGC -> split -> compress -> sum
+            // Process each stereo frame: AGC -> split -> compress -> stereo enhance -> sum
+            // Note: Stereo enhancer requires processing L/R pairs together
             for i in 0..frames {
-                for ch in 0..channels {
-                    let idx = i * channels + ch;
-                    let mut sample = self.temp_buffer[idx];
+                // Get stereo pair indices
+                let idx_l = i * channels;
+                let idx_r = i * channels + 1;
 
-                    // Wideband AGC (before multiband split)
-                    // Use 3-stage if enabled, otherwise single-stage
-                    if self.agc_use_3stage {
-                        if let Some(ref mut agc3) = self.agc_3stage {
-                            sample = agc3.process(sample, ch);
-                        }
-                    } else {
-                        sample = self.agc.process(sample, ch);
+                // Get input samples
+                let mut sample_l = self.temp_buffer[idx_l];
+                let mut sample_r = if channels >= 2 {
+                    self.temp_buffer[idx_r]
+                } else {
+                    sample_l // Mono: duplicate
+                };
+
+                // Wideband AGC (before multiband split)
+                // Use 3-stage if enabled, otherwise single-stage
+                if self.agc_use_3stage {
+                    if let Some(ref mut agc3) = self.agc_3stage {
+                        sample_l = agc3.process(sample_l, 0);
+                        sample_r = agc3.process(sample_r, 1);
                     }
+                } else {
+                    sample_l = self.agc.process(sample_l, 0);
+                    sample_r = self.agc.process(sample_r, 1);
+                }
 
-                    // Split into N bands
-                    self.crossover.split(sample, ch, &mut self.band_buffer);
+                // Split into N bands (both channels)
+                self.crossover.split(sample_l, 0, &mut self.band_buffer);
+                self.crossover.split(sample_r, 1, &mut self.band_buffer_r);
 
-                    // Compress each band and sum
-                    let mut output = 0.0f32;
-                    for (band_idx, band_sample) in self.band_buffer.iter().enumerate() {
-                        let compressed = self.compressors[band_idx].process(*band_sample, ch);
-                        output += compressed;
-                    }
+                // Process each band: compress -> stereo enhance
+                let mut output_l = 0.0f32;
+                let mut output_r = 0.0f32;
 
-                    buffer[idx] = output;
+                for band_idx in 0..num_bands.min(self.band_buffer.len()) {
+                    // Compress both channels
+                    let comp_l = self.compressors[band_idx].process(self.band_buffer[band_idx], 0);
+                    let comp_r = self.compressors[band_idx].process(self.band_buffer_r[band_idx], 1);
+
+                    // Apply per-band parametric EQ
+                    let eq_l = self.parametric_eq.process_band(band_idx, comp_l, 0);
+                    let eq_r = self.parametric_eq.process_band(band_idx, comp_r, 1);
+
+                    // Apply stereo enhancer to this band (Band 0/bass is auto-bypassed internally)
+                    let (enh_l, enh_r) = self.stereo_enhancer.process_band(band_idx, eq_l, eq_r);
+
+                    // Sum bands
+                    output_l += enh_l;
+                    output_r += enh_r;
+                }
+
+                // Write output
+                buffer[idx_l] = output_l;
+                if channels >= 2 {
+                    buffer[idx_r] = output_r;
                 }
             }
 
             // Apply output gain
             apply_gain(&mut buffer[..samples_read], self.output_gain);
 
-            // Track output peak
+            // Apply soft clipping with oversampling (final stage limiting)
+            for i in 0..frames {
+                let idx_l = i * channels;
+                let idx_r = i * channels + 1;
+                let (clipped_l, clipped_r) = self.soft_clipper.process_stereo(
+                    buffer[idx_l],
+                    if channels >= 2 { buffer[idx_r] } else { buffer[idx_l] },
+                );
+                buffer[idx_l] = clipped_l;
+                if channels >= 2 {
+                    buffer[idx_r] = clipped_r;
+                }
+            }
+
+            // Track output peak (after soft clipper)
             let out_peak = peak_level(&buffer[..samples_read]);
             self.stats
                 .output_peak_x1000
                 .store((out_peak * 1000.0) as i32, Ordering::Relaxed);
+
+            // Feed LUFS meter (metering only, no audio modification)
+            for i in 0..frames {
+                let idx_l = i * channels;
+                let idx_r = i * channels + 1;
+                self.lufs_meter.process(
+                    buffer[idx_l],
+                    if channels >= 2 { buffer[idx_r] } else { buffer[idx_l] },
+                );
+            }
+
+            // Update LUFS stats
+            self.stats.lufs_momentary_x100.store(
+                (self.lufs_meter.momentary_lufs() * 100.0) as i32,
+                Ordering::Relaxed,
+            );
+            self.stats.lufs_short_x100.store(
+                (self.lufs_meter.short_term_lufs() * 100.0) as i32,
+                Ordering::Relaxed,
+            );
+            self.stats.lufs_integrated_x100.store(
+                (self.lufs_meter.integrated_lufs() * 100.0) as i32,
+                Ordering::Relaxed,
+            );
 
             // Track AGC gain reduction (use 3-stage total if enabled)
             let agc_gr = if self.agc_use_3stage {
@@ -263,6 +367,10 @@ impl MultibandProcessor {
             agc_gr_db: self.stats.agc_gr_x100.load(Ordering::Relaxed) as f32 / 100.0,
             underruns: self.stats.underruns.load(Ordering::Relaxed),
             process_time_us: self.stats.process_time_us.load(Ordering::Relaxed),
+            lufs_momentary: self.stats.lufs_momentary_x100.load(Ordering::Relaxed) as f32 / 100.0,
+            lufs_short_term: self.stats.lufs_short_x100.load(Ordering::Relaxed) as f32 / 100.0,
+            lufs_integrated: self.stats.lufs_integrated_x100.load(Ordering::Relaxed) as f32 / 100.0,
+            _pad: 0,
         }
     }
 
@@ -285,8 +393,32 @@ impl MultibandProcessor {
                 config.release_ms,
                 config.makeup_gain_db,
             );
+            // Update lookahead setting
+            self.compressors[band].set_lookahead(config.lookahead_ms > 0.0, config.lookahead_ms);
             self.config.bands[band] = *config;
         }
+    }
+
+    /// Set lookahead for all bands at once.
+    /// This is a convenience method for enabling/disabling lookahead globally.
+    ///
+    /// # Arguments
+    /// * `enabled` - Whether lookahead is enabled
+    /// * `lookahead_ms` - Lookahead time in milliseconds (0.0 to 10.0)
+    pub fn set_lookahead(&mut self, enabled: bool, lookahead_ms: f32) {
+        for (i, comp) in self.compressors.iter_mut().enumerate() {
+            comp.set_lookahead(enabled, lookahead_ms);
+            self.config.bands[i].lookahead_ms = if enabled { lookahead_ms } else { 0.0 };
+        }
+    }
+
+    /// Get the total lookahead latency in milliseconds.
+    /// Returns the maximum lookahead across all bands (they should all be the same).
+    pub fn get_lookahead_ms(&self) -> f32 {
+        self.compressors
+            .iter()
+            .map(|c| c.lookahead_ms())
+            .fold(0.0f32, |a, b| a.max(b))
     }
 
     /// Update input and output gains.
@@ -397,6 +529,125 @@ impl MultibandProcessor {
         }
     }
 
+    /// Configure the stereo enhancer.
+    /// Band 0 (bass) is always bypassed internally to avoid phase issues.
+    pub fn set_stereo_enhancer(&mut self, config: &StereoEnhancerConfig) {
+        self.stereo_enhancer.set_enabled(config.enabled != 0);
+
+        for (i, band_cfg) in config.bands.iter().enumerate() {
+            // Band 0 is always disabled internally, but we still pass the config
+            self.stereo_enhancer.set_band(
+                i,
+                band_cfg.target_width,
+                band_cfg.max_gain_db,
+                band_cfg.max_atten_db,
+                band_cfg.attack_ms,
+                band_cfg.release_ms,
+                band_cfg.enabled != 0,
+            );
+        }
+    }
+
+    /// Check if stereo enhancer is globally enabled.
+    pub fn is_stereo_enhancer_enabled(&self) -> bool {
+        self.stereo_enhancer.is_enabled()
+    }
+
+    /// Enable or disable stereo enhancer globally.
+    pub fn set_stereo_enhancer_enabled(&mut self, enabled: bool) {
+        self.stereo_enhancer.set_enabled(enabled);
+    }
+
+    // ========================================================================
+    // Parametric EQ Methods
+    // ========================================================================
+
+    /// Configure the per-band parametric EQ.
+    pub fn set_parametric_eq(&mut self, config: &ParametricEqConfig) {
+        self.parametric_eq.set_enabled(config.enabled != 0);
+
+        for (i, band_cfg) in config.bands.iter().enumerate() {
+            self.parametric_eq.set_band(
+                i,
+                band_cfg.frequency,
+                band_cfg.q,
+                band_cfg.gain_db,
+                band_cfg.enabled != 0,
+            );
+        }
+    }
+
+    /// Check if parametric EQ is globally enabled.
+    pub fn is_parametric_eq_enabled(&self) -> bool {
+        self.parametric_eq.is_enabled()
+    }
+
+    /// Enable or disable parametric EQ globally.
+    pub fn set_parametric_eq_enabled(&mut self, enabled: bool) {
+        self.parametric_eq.set_enabled(enabled);
+    }
+
+    // ========================================================================
+    // Soft Clipper Methods
+    // ========================================================================
+
+    /// Configure the soft clipper.
+    pub fn set_soft_clipper(&mut self, config: &SoftClipperConfig) {
+        self.soft_clipper.set_params(
+            config.ceiling_db,
+            config.knee_db,
+            config.mode,
+            config.oversample,
+        );
+        self.soft_clipper.set_enabled(config.enabled != 0);
+    }
+
+    /// Check if soft clipper is enabled.
+    pub fn is_soft_clipper_enabled(&self) -> bool {
+        self.soft_clipper.is_enabled()
+    }
+
+    /// Enable or disable soft clipper.
+    pub fn set_soft_clipper_enabled(&mut self, enabled: bool) {
+        self.soft_clipper.set_enabled(enabled);
+    }
+
+    /// Get soft clipper latency in samples (due to oversampling).
+    pub fn get_soft_clipper_latency(&self) -> usize {
+        // Oversampling doesn't add latency in our implementation
+        // (we use linear interpolation, not FIR filtering)
+        0
+    }
+
+    // ========================================================================
+    // LUFS Meter Methods
+    // ========================================================================
+
+    /// Check if LUFS metering is enabled.
+    pub fn is_lufs_enabled(&self) -> bool {
+        self.lufs_meter.is_enabled()
+    }
+
+    /// Enable or disable LUFS metering.
+    pub fn set_lufs_enabled(&mut self, enabled: bool) {
+        self.lufs_meter.set_enabled(enabled);
+    }
+
+    /// Reset LUFS meter (clears integrated measurement).
+    pub fn reset_lufs(&mut self) {
+        self.lufs_meter.reset();
+    }
+
+    /// Get current LUFS readings.
+    /// Returns (momentary, short_term, integrated).
+    pub fn get_lufs(&self) -> (f32, f32, f32) {
+        (
+            self.lufs_meter.momentary_lufs(),
+            self.lufs_meter.short_term_lufs(),
+            self.lufs_meter.integrated_lufs(),
+        )
+    }
+
     /// Get the processor configuration.
     pub fn get_config(&self) -> &MultibandConfig {
         &self.config
@@ -417,6 +668,10 @@ impl MultibandProcessor {
         for comp in &mut self.compressors {
             comp.reset();
         }
+        self.stereo_enhancer.reset();
+        self.parametric_eq.reset();
+        self.soft_clipper.reset();
+        self.lufs_meter.reset();
     }
 
     /// Pre-fill is no longer needed with direct processing.

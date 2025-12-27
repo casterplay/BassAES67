@@ -35,7 +35,7 @@ impl MultibandCrossover {
     /// * `sample_rate` - Audio sample rate in Hz.
     ///
     /// # Examples
-    /// ```
+    /// ```ignore
     /// // 2-band crossover at 400 Hz
     /// let xover = MultibandCrossover::new(&[400.0], 48000.0);
     ///

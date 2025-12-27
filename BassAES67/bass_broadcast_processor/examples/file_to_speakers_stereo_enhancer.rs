@@ -1,17 +1,21 @@
-//! File to Speakers AGC Test
+//! File to Speakers Stereo Enhancer Test
 //!
-//! Usage: cargo run --example file_to_speakers_agc --release
+//! Usage: cargo run --example file_to_speakers_stereo_enhancer --release
 //!
-//! This tests the Wideband AGC (Automatic Gain Control) added in Phase 3.
-//! The AGC normalizes input levels before multiband processing.
+//! This tests the multiband Stereo Enhancer (Omnia 9 style) added in Phase 3.2.
+//! The enhancer uses Mid-Side processing to control stereo width per frequency band.
+//!
+//! Key features:
+//! - Band 0 (bass) is always bypassed to avoid phase issues
+//! - Per-band stereo width control with target width ratios
+//! - Attack/release dynamics for smooth transitions
 //!
 //! Source: Local MP3 file
 //! Output: Default audio device (speakers)
 //!
 //! Features demonstrated:
-//! - Wideband AGC with RMS detection and soft-knee compression
-//! - Real-time AGC gain reduction metering
-//! - Toggle between AGC ON/OFF to hear the difference
+//! - Toggle stereo enhancer on/off to hear the difference
+//! - Comparison of processed vs bypassed stereo image
 
 use std::ffi::{c_void, CString};
 use std::ptr;
@@ -22,6 +26,7 @@ use std::time::Duration;
 // Use the library directly
 use bass_broadcast_processor::{
     AgcConfig, CompressorConfig, MultibandConfigHeader, MultibandStatsHeader,
+    StereoEnhancerBandConfig, StereoEnhancerConfig, AGC_MODE_SINGLE,
 };
 
 // FFI imports for multiband processor
@@ -38,8 +43,16 @@ extern "system" {
         header_out: *mut MultibandStatsHeader,
         band_gr_out: *mut f32,
     ) -> i32;
-    fn BASS_MultibandProcessor_SetBypass(handle: *mut c_void, bypass: i32) -> i32;
     fn BASS_MultibandProcessor_SetAGC(handle: *mut c_void, config: *const AgcConfig) -> i32;
+    fn BASS_MultibandProcessor_SetStereoEnhancer(
+        handle: *mut c_void,
+        config: *const StereoEnhancerConfig,
+    ) -> i32;
+    fn BASS_MultibandProcessor_SetStereoEnhancerEnabled(
+        handle: *mut c_void,
+        enabled: i32,
+    ) -> i32;
+    fn BASS_MultibandProcessor_IsStereoEnhancerEnabled(handle: *mut c_void) -> i32;
     fn BASS_MultibandProcessor_Prefill(handle: *mut c_void) -> i32;
     fn BASS_MultibandProcessor_Free(handle: *mut c_void) -> i32;
 }
@@ -135,13 +148,13 @@ fn bass_error_string(code: i32) -> &'static str {
 
 fn main() {
     println!("=============================================================");
-    println!("  BASS Broadcast Processor - Phase 3: Wideband AGC Test");
+    println!("  BASS Broadcast Processor - Phase 3.2: Stereo Enhancer Test");
     println!("=============================================================\n");
 
     // Install Ctrl+C handler
     ctrlc_handler();
 
-    // Test file path - adjust this to your audio file
+    // Test file path - adjust this to your audio file (preferably stereo content!)
     let file_path = r"F:\Audio\GlobalNewsPodcast-20251215.mp3";
 
     unsafe {
@@ -193,7 +206,11 @@ fn main() {
 
         let length = BASS_ChannelGetLength(input_stream, BASS_POS_BYTE);
         println!("  Source: {}", file_path);
-        println!("  Length: {} bytes ({:.1} MB)", length, length as f64 / 1_000_000.0);
+        println!(
+            "  Length: {} bytes ({:.1} MB)",
+            length,
+            length as f64 / 1_000_000.0
+        );
 
         // Create 5-band multiband processor config
         let header = MultibandConfigHeader {
@@ -202,14 +219,14 @@ fn main() {
             num_bands: 5,
             decode_output: 0, // Playable output
             _pad: [0; 3],
-            input_gain_db: 0.0,  // No input gain - let AGC handle levels
-            output_gain_db: 0.0, // No output gain
+            input_gain_db: 0.0,
+            output_gain_db: 0.0,
         };
 
         // Crossover frequencies: 100, 400, 2000, 8000 Hz
         let crossover_freqs: [f32; 4] = [100.0, 400.0, 2000.0, 8000.0];
 
-        // Band compressor configs (moderate settings - AGC does the heavy lifting)
+        // Band compressor configs (moderate settings)
         let bands: [CompressorConfig; 5] = [
             // Sub-bass (< 100 Hz)
             CompressorConfig {
@@ -259,7 +276,7 @@ fn main() {
         ];
 
         // Create multiband processor
-        println!("\nCreating 5-band multiband processor with AGC...");
+        println!("\nCreating 5-band multiband processor...");
         let processor = BASS_MultibandProcessor_Create(
             input_stream,
             &header,
@@ -294,14 +311,86 @@ fn main() {
             return;
         }
 
-        // Print AGC settings
-        println!("\nAGC Configuration (defaults):");
-        println!("  Target Level:  -18 dBFS");
-        println!("  Threshold:     -24 dBFS");
-        println!("  Ratio:         3:1");
-        println!("  Knee:          10 dB (soft)");
-        println!("  Attack:        50 ms");
-        println!("  Release:       500 ms");
+        // Enable AGC
+        let agc_config = AgcConfig {
+            target_level_db: -18.0,
+            threshold_db: -24.0,
+            ratio: 3.0,
+            knee_db: 10.0,
+            attack_ms: 50.0,
+            release_ms: 500.0,
+            enabled: 1,
+            mode: AGC_MODE_SINGLE,
+            _pad: [0; 2],
+        };
+        BASS_MultibandProcessor_SetAGC(processor, &agc_config);
+
+        // Create stereo enhancer config with progressive enhancement
+        let stereo_config = StereoEnhancerConfig {
+            enabled: 1,
+            _pad: [0; 3],
+            bands: [
+                // Band 0 (Bass): Always bypassed internally
+                StereoEnhancerBandConfig {
+                    target_width: 1.0,
+                    max_gain_db: 0.0,
+                    max_atten_db: 0.0,
+                    attack_ms: 50.0,
+                    release_ms: 200.0,
+                    enabled: 0, // Always off for bass
+                    _pad: [0; 3],
+                },
+                // Band 1 (Low-Mid): Gentle enhancement
+                StereoEnhancerBandConfig {
+                    target_width: 1.1,
+                    max_gain_db: 6.0,
+                    max_atten_db: 6.0,
+                    attack_ms: 50.0,
+                    release_ms: 200.0,
+                    enabled: 1,
+                    _pad: [0; 3],
+                },
+                // Band 2 (Mid): Moderate enhancement
+                StereoEnhancerBandConfig {
+                    target_width: 1.3,
+                    max_gain_db: 9.0,
+                    max_atten_db: 9.0,
+                    attack_ms: 30.0,
+                    release_ms: 150.0,
+                    enabled: 1,
+                    _pad: [0; 3],
+                },
+                // Band 3 (Presence): More enhancement
+                StereoEnhancerBandConfig {
+                    target_width: 1.5,
+                    max_gain_db: 12.0,
+                    max_atten_db: 12.0,
+                    attack_ms: 20.0,
+                    release_ms: 100.0,
+                    enabled: 1,
+                    _pad: [0; 3],
+                },
+                // Band 4 (Brilliance): Maximum enhancement
+                StereoEnhancerBandConfig {
+                    target_width: 1.6,
+                    max_gain_db: 12.0,
+                    max_atten_db: 12.0,
+                    attack_ms: 15.0,
+                    release_ms: 80.0,
+                    enabled: 1,
+                    _pad: [0; 3],
+                },
+            ],
+        };
+        BASS_MultibandProcessor_SetStereoEnhancer(processor, &stereo_config);
+
+        // Print stereo enhancer settings
+        println!("\nStereo Enhancer Configuration (Omnia 9 style):");
+        println!("  Band 0 (Sub-bass):   BYPASSED - Avoids phase issues");
+        println!("  Band 1 (Low-Mid):    Width=1.1 MaxGain=6dB  - Gentle");
+        println!("  Band 2 (Mid):        Width=1.3 MaxGain=9dB  - Moderate");
+        println!("  Band 3 (Presence):   Width=1.5 MaxGain=12dB - Enhanced");
+        println!("  Band 4 (Brilliance): Width=1.6 MaxGain=12dB - Maximum");
 
         // Pre-fill and start playback
         BASS_MultibandProcessor_Prefill(processor);
@@ -322,47 +411,28 @@ fn main() {
         }
 
         println!("\n=============================================================");
-        println!("  AGC Demo Running - Listen for level normalization!");
+        println!("  Stereo Enhancer Demo Running!");
         println!("=============================================================");
         println!("  INPUT:  {}", file_path);
         println!("  OUTPUT: Default speakers");
         println!("");
-        println!("  Mode: Toggling AGC every 8 seconds");
-        println!("  - AGC ON:  Levels are normalized (quieter parts boosted)");
-        println!("  - AGC OFF: Original dynamics preserved");
+        println!("  Mode: Toggling Stereo Enhancer ON/OFF every 10 seconds");
         println!("");
-        println!("  Watch the AGC GR (Gain Reduction) meter!");
-        println!("  Negative values = AGC is reducing gain (loud parts)");
-        println!("  Near 0 = AGC is boosting gain (quiet parts)");
+        println!("  ENHANCED: Wider stereo image, especially in higher bands");
+        println!("  BYPASSED: Original stereo width preserved");
+        println!("");
+        println!("  Listen for the difference in stereo separation!");
         println!("=============================================================");
         println!("Press Ctrl+C to stop\n");
         use std::io::Write;
         std::io::stdout().flush().unwrap();
 
-        // AGC configs for toggling
-        let agc_on = AgcConfig {
-            target_level_db: -18.0,
-            threshold_db: -24.0,
-            ratio: 3.0,
-            knee_db: 10.0,
-            attack_ms: 50.0,
-            release_ms: 500.0,
-            enabled: 1,
-            mode: 0, // Single-stage mode
-            _pad: [0; 2],
-        };
-
-        let agc_off = AgcConfig {
-            enabled: 0,
-            ..agc_on
-        };
-
         // Monitor loop
         let mut stats = MultibandStatsHeader::default();
         let mut band_gr = [0.0f32; 5];
         let mut loop_count = 0u32;
-        let mut agc_enabled = true;
         let start_time = std::time::Instant::now();
+        let mut enhancer_enabled = true;
 
         while RUNNING.load(Ordering::SeqCst) {
             let state = BASS_ChannelIsActive(output_stream);
@@ -371,17 +441,19 @@ fn main() {
                 break;
             }
 
-            // Toggle AGC every 8 seconds
+            // Toggle stereo enhancer every 10 seconds
             let elapsed_secs = start_time.elapsed().as_secs();
-            let should_enable_agc = (elapsed_secs / 8) % 2 == 0;
-            if should_enable_agc != agc_enabled {
-                agc_enabled = should_enable_agc;
-                if agc_enabled {
-                    BASS_MultibandProcessor_SetAGC(processor, &agc_on);
-                    println!("\n  >>> AGC ON - Levels will be normalized <<<\n");
+            let should_enable = (elapsed_secs / 10) % 2 == 0;
+            if should_enable != enhancer_enabled {
+                enhancer_enabled = should_enable;
+                BASS_MultibandProcessor_SetStereoEnhancerEnabled(
+                    processor,
+                    if enhancer_enabled { TRUE } else { FALSE },
+                );
+                if enhancer_enabled {
+                    println!("\n  >>> STEREO ENHANCER ON - Wider stereo image <<<\n");
                 } else {
-                    BASS_MultibandProcessor_SetAGC(processor, &agc_off);
-                    println!("\n  >>> AGC OFF - Original dynamics <<<\n");
+                    println!("\n  >>> STEREO ENHANCER OFF - Original width <<<\n");
                 }
                 std::io::stdout().flush().unwrap();
             }
@@ -392,20 +464,20 @@ fn main() {
             // Display status every 5 loops (500ms)
             loop_count += 1;
             if loop_count % 5 == 1 {
-                let agc_str = if agc_enabled { "AGC ON " } else { "AGC OFF" };
                 let process_time_ms = stats.process_time_us as f64 / 1000.0;
-
-                // Create a simple visual meter for AGC GR
-                let agc_gr = stats.agc_gr_db;
-                let meter = create_meter(agc_gr, -12.0, 6.0);
+                let mode_str = if BASS_MultibandProcessor_IsStereoEnhancerEnabled(processor) != 0 {
+                    "ENHANCED"
+                } else {
+                    "BYPASSED"
+                };
 
                 println!(
-                    "[{}] In:{:5.3} Out:{:5.3} | AGC GR:{:+5.1}dB {} | {:4.2}ms",
-                    agc_str,
+                    "[{}] In:{:5.3} Out:{:5.3} | AGC:{:+5.1}dB | Bands: {:+4.1} {:+4.1} {:+4.1} {:+4.1} {:+4.1}dB | {:4.2}ms",
+                    mode_str,
                     stats.input_peak,
                     stats.output_peak,
-                    agc_gr,
-                    meter,
+                    stats.agc_gr_db,
+                    band_gr[0], band_gr[1], band_gr[2], band_gr[3], band_gr[4],
                     process_time_ms,
                 );
                 std::io::stdout().flush().unwrap();
@@ -423,35 +495,19 @@ fn main() {
         // Final stats
         println!("\nFinal Statistics:");
         println!("  Samples processed: {}", stats.samples_processed);
-        println!("  Peak levels: In={:.3} Out={:.3}", stats.input_peak, stats.output_peak);
+        println!(
+            "  Peak levels: In={:.3} Out={:.3}",
+            stats.input_peak, stats.output_peak
+        );
         println!("  AGC Gain Reduction: {:.1} dB", stats.agc_gr_db);
-        println!("  Band GR (dB): Sub={:.1} Bas={:.1} Mid={:.1} Pre={:.1} Bri={:.1}",
-            band_gr[0], band_gr[1], band_gr[2], band_gr[3], band_gr[4]);
+        println!(
+            "  Band GR (dB): Sub={:.1} Bas={:.1} Mid={:.1} Pre={:.1} Bri={:.1}",
+            band_gr[0], band_gr[1], band_gr[2], band_gr[3], band_gr[4]
+        );
         println!("  Underruns: {}", stats.underruns);
     }
 
     println!("\nDone!");
-}
-
-/// Create a simple ASCII meter for gain reduction
-fn create_meter(value: f32, min: f32, max: f32) -> String {
-    let width = 12;
-    let normalized = ((value - min) / (max - min)).clamp(0.0, 1.0);
-    let filled = (normalized * width as f32) as usize;
-
-    let mut meter = String::with_capacity(width + 2);
-    meter.push('[');
-    for i in 0..width {
-        if i < filled {
-            meter.push('=');
-        } else if i == filled {
-            meter.push('>');
-        } else {
-            meter.push(' ');
-        }
-    }
-    meter.push(']');
-    meter
 }
 
 /// Setup Ctrl+C handler for clean shutdown

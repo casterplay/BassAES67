@@ -20,7 +20,9 @@ use processor::{BroadcastProcessor, MultibandProcessor};
 // Re-export types for external use
 pub use processor::{
     Agc3StageConfig, AgcConfig, CompressorConfig, MultibandConfig, MultibandConfigHeader,
-    MultibandStatsHeader, ProcessorConfig, ProcessorStats, AGC_MODE_SINGLE, AGC_MODE_THREE_STAGE,
+    MultibandStatsHeader, ParametricEqBandConfig, ParametricEqConfig, ProcessorConfig,
+    ProcessorStats, SoftClipperConfig, StereoEnhancerBandConfig, StereoEnhancerConfig,
+    AGC_MODE_SINGLE, AGC_MODE_THREE_STAGE, CLIP_MODE_HARD, CLIP_MODE_SOFT, CLIP_MODE_TANH,
 };
 
 /// STREAMPROC callback - called by BASS when output stream needs samples.
@@ -654,6 +656,444 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_GetAGC3StageGR(
     *slow_gr = slow;
     *medium_gr = medium;
     *fast_gr = fast;
+    TRUE
+}
+
+// ============================================================================
+// Lookahead Control FFI Functions
+// ============================================================================
+
+/// Set lookahead for all compressor bands.
+/// Lookahead adds latency but allows transparent limiting of fast transients.
+///
+/// # Arguments
+/// * `handle` - Processor handle from BASS_MultibandProcessor_Create
+/// * `enabled` - TRUE to enable lookahead, FALSE to disable
+/// * `lookahead_ms` - Lookahead time in milliseconds (0.0 to 10.0)
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetLookahead(
+    handle: *mut c_void,
+    enabled: BOOL,
+    lookahead_ms: f32,
+) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.set_lookahead(enabled != 0, lookahead_ms);
+    TRUE
+}
+
+/// Get current lookahead latency in milliseconds.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+///
+/// # Returns
+/// Lookahead latency in milliseconds, or 0.0 if disabled or on error.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetLookahead(handle: *mut c_void) -> f32 {
+    if handle.is_null() {
+        return 0.0;
+    }
+
+    let processor = &*(handle as *const MultibandProcessor);
+    processor.get_lookahead_ms()
+}
+
+// ============================================================================
+// Phase 3.2: Stereo Enhancer (Omnia 9 Style) FFI Functions
+// ============================================================================
+
+/// Set stereo enhancer configuration for multiband processor.
+/// The stereo enhancer uses Mid-Side processing to control stereo width per band.
+/// Band 0 (bass) is always bypassed internally to avoid phase issues.
+///
+/// # Arguments
+/// * `handle` - Processor handle from BASS_MultibandProcessor_Create
+/// * `config` - Pointer to StereoEnhancerConfig structure
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetStereoEnhancer(
+    handle: *mut c_void,
+    config: *const StereoEnhancerConfig,
+) -> BOOL {
+    if handle.is_null() || config.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.set_stereo_enhancer(&*config);
+    TRUE
+}
+
+/// Get default stereo enhancer configuration.
+///
+/// # Arguments
+/// * `config` - Pointer to StereoEnhancerConfig structure to fill with defaults
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetDefaultStereoEnhancer(
+    config: *mut StereoEnhancerConfig,
+) -> BOOL {
+    if config.is_null() {
+        return FALSE;
+    }
+
+    *config = StereoEnhancerConfig::default();
+    TRUE
+}
+
+/// Check if stereo enhancer is enabled.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+///
+/// # Returns
+/// TRUE (1) if stereo enhancer is enabled, FALSE (0) if bypassed.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_IsStereoEnhancerEnabled(
+    handle: *mut c_void,
+) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &*(handle as *const MultibandProcessor);
+    if processor.is_stereo_enhancer_enabled() {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+/// Enable or disable stereo enhancer globally.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+/// * `enabled` - TRUE (1) to enable, FALSE (0) to bypass
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetStereoEnhancerEnabled(
+    handle: *mut c_void,
+    enabled: BOOL,
+) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.set_stereo_enhancer_enabled(enabled != 0);
+    TRUE
+}
+
+// ============================================================================
+// Per-Band Parametric EQ FFI Functions
+// ============================================================================
+
+/// Set parametric EQ configuration for multiband processor.
+/// Each band can have its own parametric EQ section for frequency shaping.
+///
+/// # Arguments
+/// * `handle` - Processor handle from BASS_MultibandProcessor_Create
+/// * `config` - Pointer to ParametricEqConfig structure
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetParametricEQ(
+    handle: *mut c_void,
+    config: *const ParametricEqConfig,
+) -> BOOL {
+    if handle.is_null() || config.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.set_parametric_eq(&*config);
+    TRUE
+}
+
+/// Get default parametric EQ configuration.
+///
+/// # Arguments
+/// * `config` - Pointer to ParametricEqConfig structure to fill with defaults
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetDefaultParametricEQ(
+    config: *mut ParametricEqConfig,
+) -> BOOL {
+    if config.is_null() {
+        return FALSE;
+    }
+
+    *config = ParametricEqConfig::default();
+    TRUE
+}
+
+/// Check if parametric EQ is enabled.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+///
+/// # Returns
+/// TRUE (1) if parametric EQ is enabled, FALSE (0) if bypassed.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_IsParametricEQEnabled(
+    handle: *mut c_void,
+) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &*(handle as *const MultibandProcessor);
+    if processor.is_parametric_eq_enabled() {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+/// Enable or disable parametric EQ globally.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+/// * `enabled` - TRUE (1) to enable, FALSE (0) to bypass
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetParametricEQEnabled(
+    handle: *mut c_void,
+    enabled: BOOL,
+) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.set_parametric_eq_enabled(enabled != 0);
+    TRUE
+}
+
+// ============================================================================
+// Soft Clipper FFI Functions
+// ============================================================================
+
+/// Set soft clipper configuration for multiband processor.
+/// The soft clipper provides final-stage limiting with optional oversampling
+/// to catch intersample peaks.
+///
+/// # Arguments
+/// * `handle` - Processor handle from BASS_MultibandProcessor_Create
+/// * `config` - Pointer to SoftClipperConfig structure
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetSoftClipper(
+    handle: *mut c_void,
+    config: *const SoftClipperConfig,
+) -> BOOL {
+    if handle.is_null() || config.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.set_soft_clipper(&*config);
+    TRUE
+}
+
+/// Get default soft clipper configuration.
+///
+/// # Arguments
+/// * `config` - Pointer to SoftClipperConfig structure to fill with defaults
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetDefaultSoftClipper(
+    config: *mut SoftClipperConfig,
+) -> BOOL {
+    if config.is_null() {
+        return FALSE;
+    }
+
+    *config = SoftClipperConfig::default();
+    TRUE
+}
+
+/// Check if soft clipper is enabled.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+///
+/// # Returns
+/// TRUE (1) if soft clipper is enabled, FALSE (0) if bypassed.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_IsSoftClipperEnabled(
+    handle: *mut c_void,
+) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &*(handle as *const MultibandProcessor);
+    if processor.is_soft_clipper_enabled() {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+/// Enable or disable soft clipper.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+/// * `enabled` - TRUE (1) to enable, FALSE (0) to bypass
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetSoftClipperEnabled(
+    handle: *mut c_void,
+    enabled: BOOL,
+) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.set_soft_clipper_enabled(enabled != 0);
+    TRUE
+}
+
+/// Get soft clipper latency in milliseconds.
+/// This includes any latency from oversampling.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+///
+/// # Returns
+/// Latency in milliseconds, or 0.0 on error.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetSoftClipperLatency(
+    handle: *mut c_void,
+) -> f32 {
+    if handle.is_null() {
+        return 0.0;
+    }
+
+    let processor = &*(handle as *const MultibandProcessor);
+    processor.get_soft_clipper_latency() as f32
+}
+
+// ============================================================================
+// LUFS Metering FFI Functions
+// ============================================================================
+
+/// Get LUFS loudness readings.
+/// Returns momentary (400ms), short-term (3s), and integrated (gated) loudness.
+///
+/// # Arguments
+/// * `handle` - Processor handle from BASS_MultibandProcessor_Create
+/// * `momentary` - Pointer to receive momentary LUFS (-100.0 if no data)
+/// * `short_term` - Pointer to receive short-term LUFS (-100.0 if no data)
+/// * `integrated` - Pointer to receive integrated LUFS (-100.0 if no data)
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetLUFS(
+    handle: *mut c_void,
+    momentary: *mut f32,
+    short_term: *mut f32,
+    integrated: *mut f32,
+) -> BOOL {
+    if handle.is_null() || momentary.is_null() || short_term.is_null() || integrated.is_null() {
+        return FALSE;
+    }
+
+    let processor = &*(handle as *const MultibandProcessor);
+    let (m, s, i) = processor.get_lufs();
+    *momentary = m;
+    *short_term = s;
+    *integrated = i;
+    TRUE
+}
+
+/// Reset LUFS meter measurements.
+/// Clears the integrated loudness measurement for new program material.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_ResetLUFS(handle: *mut c_void) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.reset_lufs();
+    TRUE
+}
+
+/// Check if LUFS metering is enabled.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+///
+/// # Returns
+/// TRUE (1) if LUFS metering is enabled, FALSE (0) if disabled.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_IsLUFSEnabled(handle: *mut c_void) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &*(handle as *const MultibandProcessor);
+    if processor.is_lufs_enabled() {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+/// Enable or disable LUFS metering.
+/// Disabling LUFS metering can save CPU if loudness measurement is not needed.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+/// * `enabled` - TRUE (1) to enable, FALSE (0) to disable
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetLUFSEnabled(
+    handle: *mut c_void,
+    enabled: BOOL,
+) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.set_lufs_enabled(enabled != 0);
     TRUE
 }
 

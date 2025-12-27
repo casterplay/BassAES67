@@ -207,6 +207,7 @@ fn main() {
                 attack_ms: 20.0,      // Slower attack to let transients through
                 release_ms: 150.0,    // Moderate release
                 makeup_gain_db: 6.0,  // Boost compressed signal back up
+                lookahead_ms: 0.0,
             },
             high_band: CompressorConfig {
                 threshold_db: -20.0,  // Aggressive threshold for voice
@@ -214,6 +215,7 @@ fn main() {
                 attack_ms: 5.0,       // Fast attack for voice
                 release_ms: 100.0,    // Quick release for natural speech
                 makeup_gain_db: 8.0,  // Significant makeup gain
+                lookahead_ms: 0.0,
             },
         };
 

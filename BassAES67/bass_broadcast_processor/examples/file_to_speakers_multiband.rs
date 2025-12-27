@@ -216,6 +216,7 @@ fn main() {
                 attack_ms: 10.0,
                 release_ms: 200.0,
                 makeup_gain_db: 4.0,
+            lookahead_ms: 0.0,
             },
             // Bass (100 - 400 Hz)
             CompressorConfig {
@@ -224,6 +225,7 @@ fn main() {
                 attack_ms: 5.0,
                 release_ms: 150.0,
                 makeup_gain_db: 5.0,
+            lookahead_ms: 0.0,
             },
             // Midrange (400 - 2000 Hz)
             CompressorConfig {
@@ -232,6 +234,7 @@ fn main() {
                 attack_ms: 3.0,
                 release_ms: 100.0,
                 makeup_gain_db: 4.0,
+            lookahead_ms: 0.0,
             },
             // Presence (2000 - 8000 Hz)
             CompressorConfig {
@@ -240,6 +243,7 @@ fn main() {
                 attack_ms: 1.0,
                 release_ms: 80.0,
                 makeup_gain_db: 5.0,
+            lookahead_ms: 0.0,
             },
             // Brilliance (> 8000 Hz)
             CompressorConfig {
@@ -248,6 +252,7 @@ fn main() {
                 attack_ms: 0.5,
                 release_ms: 50.0,
                 makeup_gain_db: 3.0,
+            lookahead_ms: 0.0,
             },
         ];
 
