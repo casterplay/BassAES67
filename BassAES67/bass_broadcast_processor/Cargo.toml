@@ -1,0 +1,21 @@
+[package]
+name = "bass-broadcast-processor"
+version = "0.1.0"
+edition = "2021"
+description = "Broadcast audio processor for BASS - multiband compressor/limiter"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[example]]
+name = "file_to_speakers"
+path = "examples/file_to_speakers.rs"
+
+[dependencies]
+# No external dependencies - processor is zero-latency sample-by-sample
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }
+
+[build-dependencies]
