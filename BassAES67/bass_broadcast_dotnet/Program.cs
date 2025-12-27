@@ -24,8 +24,9 @@ class Program
         }
 
         // Load a test file (change this path to your audio file)
-        string testFile = args.Length > 0 ? args[0] : @"F:\Audio\GlobalNewsPodcast-20251215.mp3";
-
+        //string testFile = args.Length > 0 ? args[0] : @"F:\Audio\GlobalNewsPodcast-20251215.mp3";
+string testFile = args.Length > 0 ? args[0] : @"E:\PromoOnly2022\Mainstream Radio August 2022\KateBush-RunningUpThatHill(ADealWithGod)(RadioEdit)-(m4a).m4a";
+//
         _sourceChannel = Bass.BASS_StreamCreateFile(testFile, 0, 0,
             BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT);
 
@@ -320,9 +321,9 @@ class Program
         if (config.Bands != null && config.Bands.Length >= 5)
         {
             // Band 1: Low shelf boost at 80Hz
-            config.Bands[0].Frequency = 80f;
+            config.Bands[0].Frequency = 70f;
             config.Bands[0].Q = 0.7f;
-            config.Bands[0].GainDb = 2f;
+            config.Bands[0].GainDb = 8f;
             config.Bands[0].IsEnabled = true;
 
             // Band 2: Cut mud at 250Hz
@@ -338,9 +339,9 @@ class Program
             config.Bands[2].IsEnabled = true;
 
             // Band 4: Air at 12kHz
-            config.Bands[3].Frequency = 12000f;
+            config.Bands[3].Frequency = 6000f;
             config.Bands[3].Q = 0.7f;
-            config.Bands[3].GainDb = 2f;
+            config.Bands[3].GainDb = 8f;
             config.Bands[3].IsEnabled = true;
 
             // Band 5: Not used
