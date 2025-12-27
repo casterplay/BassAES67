@@ -9,6 +9,10 @@
 
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 mod dsp;
 mod ffi;
@@ -16,6 +20,113 @@ mod processor;
 
 use ffi::*;
 use processor::{BroadcastProcessor, MultibandProcessor};
+
+// ============================================================================
+// Stats Callback Infrastructure for C# Bindings
+// ============================================================================
+
+/// Maximum number of bands supported in stats callback data
+pub const MAX_BANDS: usize = 8;
+
+/// Stats callback function type.
+/// Called periodically with processor statistics.
+pub type ProcessorStatsCallback = unsafe extern "system" fn(
+    stats: *const ProcessorStatsCallbackData,
+    user: *mut c_void,
+);
+
+/// FFI-safe stats callback data.
+/// Contains all real-time statistics in a fixed-size structure for C# interop.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProcessorStatsCallbackData {
+    /// Momentary loudness (LUFS, 400ms window)
+    pub lufs_momentary: f32,
+    /// Short-term loudness (LUFS, 3s window)
+    pub lufs_short_term: f32,
+    /// Integrated loudness (LUFS, gated)
+    pub lufs_integrated: f32,
+    /// Input peak level (linear, 0.0 to 1.0+)
+    pub input_peak: f32,
+    /// Output peak level (linear, 0.0 to 1.0+)
+    pub output_peak: f32,
+    /// AGC gain reduction in dB (negative when compressing)
+    pub agc_gr_db: f32,
+    /// Per-band gain reduction in dB (fixed 8-element array)
+    pub band_gr_db: [f32; MAX_BANDS],
+    /// Actual number of bands in use (1-8)
+    pub num_bands: u32,
+    /// Clipper activity (0.0 = no clipping, 1.0 = constant clipping)
+    pub clipper_activity: f32,
+    /// Total samples (frames) processed
+    pub samples_processed: u64,
+    /// Number of source underruns
+    pub underruns: u64,
+    /// Last processing time in microseconds
+    pub process_time_us: u64,
+}
+
+impl Default for ProcessorStatsCallbackData {
+    fn default() -> Self {
+        Self {
+            lufs_momentary: -100.0,
+            lufs_short_term: -100.0,
+            lufs_integrated: -100.0,
+            input_peak: 0.0,
+            output_peak: 0.0,
+            agc_gr_db: 0.0,
+            band_gr_db: [0.0; MAX_BANDS],
+            num_bands: 0,
+            clipper_activity: 0.0,
+            samples_processed: 0,
+            underruns: 0,
+            process_time_us: 0,
+        }
+    }
+}
+
+/// Wrapper around MultibandProcessor that adds stats callback support.
+/// This wrapper is what gets boxed and passed through FFI.
+struct MultibandProcessorWrapper {
+    /// The actual processor
+    processor: MultibandProcessor,
+    /// Stats callback function (None = disabled)
+    stats_callback: Option<ProcessorStatsCallback>,
+    /// User data pointer for callback
+    stats_user: *mut c_void,
+    /// Stats reporting interval in milliseconds
+    stats_interval_ms: u32,
+    /// Flag to signal stats loop to stop
+    stats_running: Arc<AtomicBool>,
+    /// Handle to the stats thread (if running)
+    stats_thread: Option<JoinHandle<()>>,
+}
+
+// Safety: The wrapper is only accessed from one thread at a time (audio thread or main thread)
+// The stats callback is designed to be called from a separate thread
+unsafe impl Send for MultibandProcessorWrapper {}
+
+impl MultibandProcessorWrapper {
+    /// Create a new wrapper around a processor.
+    fn new(processor: MultibandProcessor) -> Self {
+        Self {
+            processor,
+            stats_callback: None,
+            stats_user: ptr::null_mut(),
+            stats_interval_ms: 100,
+            stats_running: Arc::new(AtomicBool::new(false)),
+            stats_thread: None,
+        }
+    }
+
+    /// Stop the stats loop if running.
+    fn stop_stats_loop(&mut self) {
+        self.stats_running.store(false, Ordering::SeqCst);
+        if let Some(handle) = self.stats_thread.take() {
+            let _ = handle.join();
+        }
+    }
+}
 
 // Re-export types for external use
 pub use processor::{
@@ -274,6 +385,7 @@ pub unsafe extern "system" fn BASS_Processor_GetDefaultConfig(config: *mut Proce
 // ============================================================================
 
 /// STREAMPROC callback for multiband processor.
+/// Now uses MultibandProcessorWrapper to access the processor.
 unsafe extern "system" fn multiband_stream_proc(
     _handle: HSTREAM,
     buffer: *mut c_void,
@@ -284,11 +396,11 @@ unsafe extern "system" fn multiband_stream_proc(
         return 0;
     }
 
-    let processor = &mut *(user as *mut MultibandProcessor);
+    let wrapper = &mut *(user as *mut MultibandProcessorWrapper);
     let samples = length as usize / 4; // 4 bytes per f32
     let float_buffer = std::slice::from_raw_parts_mut(buffer as *mut f32, samples);
 
-    let written = processor.read_samples(float_buffer);
+    let written = wrapper.processor.read_samples(float_buffer);
 
     (written * 4) as DWORD
 }
@@ -340,8 +452,11 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_Create(
             let channels = processor.get_config().header.channels as DWORD;
             let decode_output = processor.is_decode_output();
 
+            // Wrap processor in MultibandProcessorWrapper for callback support
+            let wrapper = MultibandProcessorWrapper::new(processor);
+
             // Box and leak to get stable pointer
-            let boxed = Box::new(processor);
+            let boxed = Box::new(wrapper);
             let ptr = Box::into_raw(boxed);
 
             // Build stream flags
@@ -350,7 +465,7 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_Create(
                 flags |= BASS_STREAM_DECODE;
             }
 
-            // Create output BASS stream with processor pointer
+            // Create output BASS stream with wrapper pointer
             let handle = BASS_StreamCreate(
                 sample_rate,
                 channels,
@@ -365,7 +480,7 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_Create(
                 return ptr::null_mut();
             }
 
-            (*ptr).output_handle = handle;
+            (*ptr).processor.output_handle = handle;
             ptr as *mut c_void
         }
         Err(_) => ptr::null_mut(),
@@ -378,8 +493,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_GetOutput(handle: *mut c_v
     if handle.is_null() {
         return 0;
     }
-    let processor = &*(handle as *const MultibandProcessor);
-    processor.output_handle
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    wrapper.processor.output_handle
 }
 
 /// Get multiband processor statistics (lock-free).
@@ -401,11 +516,11 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_GetStats(
         return FALSE;
     }
 
-    let processor = &*(handle as *const MultibandProcessor);
-    let num_bands = processor.num_bands();
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    let num_bands = wrapper.processor.num_bands();
 
     let band_gr_slice = std::slice::from_raw_parts_mut(band_gr_out, num_bands);
-    *header_out = processor.get_stats(band_gr_slice);
+    *header_out = wrapper.processor.get_stats(band_gr_slice);
 
     TRUE
 }
@@ -426,14 +541,14 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetBand(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
     let cfg = &*config;
 
-    if band as usize >= processor.num_bands() {
+    if band as usize >= wrapper.processor.num_bands() {
         return FALSE;
     }
 
-    processor.set_band(band as usize, cfg);
+    wrapper.processor.set_band(band as usize, cfg);
     TRUE
 }
 
@@ -447,8 +562,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetBypass(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.bypass = bypass != 0;
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.bypass = bypass != 0;
     TRUE
 }
 
@@ -463,8 +578,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetGains(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.set_gains(input_gain_db, output_gain_db);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.set_gains(input_gain_db, output_gain_db);
     TRUE
 }
 
@@ -475,8 +590,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_Reset(handle: *mut c_void)
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.reset();
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.reset();
     TRUE
 }
 
@@ -487,8 +602,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_Prefill(handle: *mut c_voi
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.prefill();
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.prefill();
     TRUE
 }
 
@@ -499,11 +614,15 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_Free(handle: *mut c_void) 
         return FALSE;
     }
 
-    let processor = Box::from_raw(handle as *mut MultibandProcessor);
-    if processor.output_handle != 0 {
-        BASS_StreamFree(processor.output_handle);
+    let mut wrapper = Box::from_raw(handle as *mut MultibandProcessorWrapper);
+
+    // Stop stats loop first (if running)
+    wrapper.stop_stats_loop();
+
+    if wrapper.processor.output_handle != 0 {
+        BASS_StreamFree(wrapper.processor.output_handle);
     }
-    // Box drops here, freeing processor
+    // Box drops here, freeing wrapper and processor
     TRUE
 }
 
@@ -514,8 +633,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_GetNumBands(handle: *mut c
         return 0;
     }
 
-    let processor = &*(handle as *const MultibandProcessor);
-    processor.num_bands() as DWORD
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    wrapper.processor.num_bands() as DWORD
 }
 
 // ============================================================================
@@ -539,8 +658,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetAGC(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.set_agc(&*config);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.set_agc(&*config);
     TRUE
 }
 
@@ -585,8 +704,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetAGC3Stage(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.set_agc_3stage(&*config);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.set_agc_3stage(&*config);
     TRUE
 }
 
@@ -622,8 +741,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_IsAGC3Stage(handle: *mut c
         return FALSE;
     }
 
-    let processor = &*(handle as *const MultibandProcessor);
-    if processor.is_agc_3stage() {
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    if wrapper.processor.is_agc_3stage() {
         TRUE
     } else {
         FALSE
@@ -651,8 +770,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_GetAGC3StageGR(
         return FALSE;
     }
 
-    let processor = &*(handle as *const MultibandProcessor);
-    let (slow, medium, fast) = processor.get_agc_3stage_gr();
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    let (slow, medium, fast) = wrapper.processor.get_agc_3stage_gr();
     *slow_gr = slow;
     *medium_gr = medium;
     *fast_gr = fast;
@@ -683,8 +802,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetLookahead(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.set_lookahead(enabled != 0, lookahead_ms);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.set_lookahead(enabled != 0, lookahead_ms);
     TRUE
 }
 
@@ -701,8 +820,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_GetLookahead(handle: *mut 
         return 0.0;
     }
 
-    let processor = &*(handle as *const MultibandProcessor);
-    processor.get_lookahead_ms()
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    wrapper.processor.get_lookahead_ms()
 }
 
 // ============================================================================
@@ -728,8 +847,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetStereoEnhancer(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.set_stereo_enhancer(&*config);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.set_stereo_enhancer(&*config);
     TRUE
 }
 
@@ -767,8 +886,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_IsStereoEnhancerEnabled(
         return FALSE;
     }
 
-    let processor = &*(handle as *const MultibandProcessor);
-    if processor.is_stereo_enhancer_enabled() {
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    if wrapper.processor.is_stereo_enhancer_enabled() {
         TRUE
     } else {
         FALSE
@@ -792,8 +911,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetStereoEnhancerEnabled(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.set_stereo_enhancer_enabled(enabled != 0);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.set_stereo_enhancer_enabled(enabled != 0);
     TRUE
 }
 
@@ -819,8 +938,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetParametricEQ(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.set_parametric_eq(&*config);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.set_parametric_eq(&*config);
     TRUE
 }
 
@@ -858,8 +977,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_IsParametricEQEnabled(
         return FALSE;
     }
 
-    let processor = &*(handle as *const MultibandProcessor);
-    if processor.is_parametric_eq_enabled() {
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    if wrapper.processor.is_parametric_eq_enabled() {
         TRUE
     } else {
         FALSE
@@ -883,8 +1002,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetParametricEQEnabled(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.set_parametric_eq_enabled(enabled != 0);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.set_parametric_eq_enabled(enabled != 0);
     TRUE
 }
 
@@ -911,8 +1030,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetSoftClipper(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.set_soft_clipper(&*config);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.set_soft_clipper(&*config);
     TRUE
 }
 
@@ -950,8 +1069,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_IsSoftClipperEnabled(
         return FALSE;
     }
 
-    let processor = &*(handle as *const MultibandProcessor);
-    if processor.is_soft_clipper_enabled() {
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    if wrapper.processor.is_soft_clipper_enabled() {
         TRUE
     } else {
         FALSE
@@ -975,8 +1094,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetSoftClipperEnabled(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.set_soft_clipper_enabled(enabled != 0);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.set_soft_clipper_enabled(enabled != 0);
     TRUE
 }
 
@@ -996,8 +1115,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_GetSoftClipperLatency(
         return 0.0;
     }
 
-    let processor = &*(handle as *const MultibandProcessor);
-    processor.get_soft_clipper_latency() as f32
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    wrapper.processor.get_soft_clipper_latency() as f32
 }
 
 // ============================================================================
@@ -1026,8 +1145,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_GetLUFS(
         return FALSE;
     }
 
-    let processor = &*(handle as *const MultibandProcessor);
-    let (m, s, i) = processor.get_lufs();
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    let (m, s, i) = wrapper.processor.get_lufs();
     *momentary = m;
     *short_term = s;
     *integrated = i;
@@ -1048,8 +1167,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_ResetLUFS(handle: *mut c_v
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.reset_lufs();
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.reset_lufs();
     TRUE
 }
 
@@ -1066,8 +1185,8 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_IsLUFSEnabled(handle: *mut
         return FALSE;
     }
 
-    let processor = &*(handle as *const MultibandProcessor);
-    if processor.is_lufs_enabled() {
+    let wrapper = &*(handle as *const MultibandProcessorWrapper);
+    if wrapper.processor.is_lufs_enabled() {
         TRUE
     } else {
         FALSE
@@ -1092,8 +1211,143 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_SetLUFSEnabled(
         return FALSE;
     }
 
-    let processor = &mut *(handle as *mut MultibandProcessor);
-    processor.set_lufs_enabled(enabled != 0);
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+    wrapper.processor.set_lufs_enabled(enabled != 0);
+    TRUE
+}
+
+// ============================================================================
+// Stats Callback FFI Functions
+// ============================================================================
+
+/// Wrapper to safely send a raw pointer across thread boundaries.
+/// Safety: The caller ensures the pointed-to data remains valid for the thread's lifetime.
+#[derive(Clone, Copy)]
+struct SendablePtr(usize);
+
+impl SendablePtr {
+    fn from_const<T>(ptr: *const T) -> Self {
+        Self(ptr as usize)
+    }
+
+    fn from_mut<T>(ptr: *mut T) -> Self {
+        Self(ptr as usize)
+    }
+
+    unsafe fn as_const<T>(&self) -> *const T {
+        self.0 as *const T
+    }
+
+    unsafe fn as_mut<T>(&self) -> *mut T {
+        self.0 as *mut T
+    }
+}
+
+// usize is Send, so SendablePtr is Send
+unsafe impl Send for SendablePtr {}
+
+/// Set or clear the stats callback for periodic statistics updates.
+/// When a callback is set, a background thread will periodically collect stats
+/// and invoke the callback with the data.
+///
+/// # Arguments
+/// * `handle` - Processor handle from BASS_MultibandProcessor_Create
+/// * `callback` - Callback function, or None to disable
+/// * `interval_ms` - Update interval in milliseconds (50-1000, default 100)
+/// * `user` - User data pointer passed to callback
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetStatsCallback(
+    handle: *mut c_void,
+    callback: Option<ProcessorStatsCallback>,
+    interval_ms: u32,
+    user: *mut c_void,
+) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let wrapper = &mut *(handle as *mut MultibandProcessorWrapper);
+
+    // Stop any existing stats loop
+    wrapper.stop_stats_loop();
+
+    // If no callback, we're done
+    let cb = match callback {
+        Some(cb) => cb,
+        None => {
+            wrapper.stats_callback = None;
+            wrapper.stats_user = ptr::null_mut();
+            return TRUE;
+        }
+    };
+
+    // Store callback info
+    wrapper.stats_callback = Some(cb);
+    wrapper.stats_user = user;
+    wrapper.stats_interval_ms = interval_ms.clamp(50, 1000);
+
+    // Prepare data for spawned thread
+    let interval_ms_copy = wrapper.stats_interval_ms;
+    let running = Arc::clone(&wrapper.stats_running);
+
+    // Wrap raw pointers in Send-safe wrappers BEFORE defining the closure
+    // This prevents the raw pointers from being captured directly
+    let user_wrapped = SendablePtr::from_mut(user);
+    let processor_wrapped = SendablePtr::from_const(&wrapper.processor as *const MultibandProcessor);
+
+    // Start stats loop
+    running.store(true, Ordering::SeqCst);
+
+    let thread_handle = thread::spawn(move || {
+        let interval = Duration::from_millis(interval_ms_copy as u64);
+
+        while running.load(Ordering::SeqCst) {
+            thread::sleep(interval);
+
+            if !running.load(Ordering::SeqCst) {
+                break;
+            }
+
+            // Read stats from processor (lock-free atomics)
+            let processor = unsafe { &*processor_wrapped.as_const::<MultibandProcessor>() };
+            let num_bands = processor.num_bands().min(MAX_BANDS);
+
+            // Collect per-band gain reduction
+            let mut band_gr_buffer = [0.0f32; MAX_BANDS];
+            let header = processor.get_stats(&mut band_gr_buffer[..num_bands]);
+
+            // Build callback data
+            let mut data = ProcessorStatsCallbackData {
+                lufs_momentary: header.lufs_momentary,
+                lufs_short_term: header.lufs_short_term,
+                lufs_integrated: header.lufs_integrated,
+                input_peak: header.input_peak,
+                output_peak: header.output_peak,
+                agc_gr_db: header.agc_gr_db,
+                band_gr_db: [0.0; MAX_BANDS],
+                num_bands: num_bands as u32,
+                clipper_activity: 0.0, // TODO: Add clipper activity tracking
+                samples_processed: header.samples_processed,
+                underruns: header.underruns,
+                process_time_us: header.process_time_us,
+            };
+
+            // Copy band GR values
+            for i in 0..num_bands {
+                data.band_gr_db[i] = band_gr_buffer[i];
+            }
+
+            // Fire callback
+            unsafe {
+                (cb)(&data as *const ProcessorStatsCallbackData, user_wrapped.as_mut::<c_void>());
+            }
+        }
+    });
+
+    wrapper.stats_thread = Some(thread_handle);
     TRUE
 }
 
