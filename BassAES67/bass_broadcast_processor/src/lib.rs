@@ -1,7 +1,11 @@
 //! Broadcast Audio Processor for BASS
 //!
-//! A 2-band broadcast audio processor that sits between BASS audio streams.
+//! A multiband broadcast audio processor that sits between BASS audio streams.
 //! Provides crossover filtering and per-band compression.
+//!
+//! Two processor types available:
+//! - `BASS_Processor_*` - Original 2-band processor (backward compatible)
+//! - `BASS_MultibandProcessor_*` - N-band processor (2, 5, 8, or any number of bands)
 
 use std::ffi::c_void;
 use std::ptr;
@@ -11,10 +15,13 @@ mod ffi;
 mod processor;
 
 use ffi::*;
-use processor::BroadcastProcessor;
+use processor::{BroadcastProcessor, MultibandProcessor};
 
 // Re-export types for external use
-pub use processor::{CompressorConfig, ProcessorConfig, ProcessorStats};
+pub use processor::{
+    CompressorConfig, MultibandConfig, MultibandConfigHeader,
+    MultibandStatsHeader, ProcessorConfig, ProcessorStats,
+};
 
 /// STREAMPROC callback - called by BASS when output stream needs samples.
 unsafe extern "system" fn processor_stream_proc(
@@ -258,6 +265,255 @@ pub unsafe extern "system" fn BASS_Processor_GetDefaultConfig(config: *mut Proce
 
     *config = ProcessorConfig::default();
     TRUE
+}
+
+// ============================================================================
+// N-Band Multiband Processor FFI
+// ============================================================================
+
+/// STREAMPROC callback for multiband processor.
+unsafe extern "system" fn multiband_stream_proc(
+    _handle: HSTREAM,
+    buffer: *mut c_void,
+    length: DWORD,
+    user: *mut c_void,
+) -> DWORD {
+    if user.is_null() {
+        return 0;
+    }
+
+    let processor = &mut *(user as *mut MultibandProcessor);
+    let samples = length as usize / 4; // 4 bytes per f32
+    let float_buffer = std::slice::from_raw_parts_mut(buffer as *mut f32, samples);
+
+    let written = processor.read_samples(float_buffer);
+
+    (written * 4) as DWORD
+}
+
+/// Create a new N-band multiband processor.
+///
+/// # Arguments
+/// * `source_channel` - BASS channel handle to pull audio from
+/// * `header` - Pointer to MultibandConfigHeader structure
+/// * `crossover_freqs` - Pointer to array of crossover frequencies (num_bands - 1 elements)
+/// * `bands` - Pointer to array of CompressorConfig (num_bands elements)
+///
+/// # Returns
+/// Opaque handle (pointer) to the processor, or null on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_Create(
+    source_channel: DWORD,
+    header: *const MultibandConfigHeader,
+    crossover_freqs: *const f32,
+    bands: *const CompressorConfig,
+) -> *mut c_void {
+    if header.is_null() || crossover_freqs.is_null() || bands.is_null() {
+        return ptr::null_mut();
+    }
+
+    let hdr = *header;
+    let num_bands = hdr.num_bands as usize;
+
+    if num_bands < 2 {
+        return ptr::null_mut();
+    }
+
+    // Copy crossover frequencies (num_bands - 1)
+    let freqs = std::slice::from_raw_parts(crossover_freqs, num_bands - 1).to_vec();
+
+    // Copy band configs (num_bands)
+    let band_cfgs = std::slice::from_raw_parts(bands, num_bands).to_vec();
+
+    let config = MultibandConfig {
+        header: hdr,
+        crossover_freqs: freqs,
+        bands: band_cfgs,
+    };
+
+    match MultibandProcessor::new(source_channel, config) {
+        Ok(processor) => {
+            // Get config values before boxing
+            let sample_rate = processor.get_config().header.sample_rate;
+            let channels = processor.get_config().header.channels as DWORD;
+            let decode_output = processor.is_decode_output();
+
+            // Box and leak to get stable pointer
+            let boxed = Box::new(processor);
+            let ptr = Box::into_raw(boxed);
+
+            // Build stream flags
+            let mut flags = BASS_SAMPLE_FLOAT;
+            if decode_output {
+                flags |= BASS_STREAM_DECODE;
+            }
+
+            // Create output BASS stream with processor pointer
+            let handle = BASS_StreamCreate(
+                sample_rate,
+                channels,
+                flags,
+                multiband_stream_proc,
+                ptr as *mut c_void,
+            );
+
+            if handle == 0 {
+                // Cleanup on failure
+                let _ = Box::from_raw(ptr);
+                return ptr::null_mut();
+            }
+
+            (*ptr).output_handle = handle;
+            ptr as *mut c_void
+        }
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Get the output BASS stream handle for multiband processor.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetOutput(handle: *mut c_void) -> HSTREAM {
+    if handle.is_null() {
+        return 0;
+    }
+    let processor = &*(handle as *const MultibandProcessor);
+    processor.output_handle
+}
+
+/// Get multiband processor statistics (lock-free).
+///
+/// # Arguments
+/// * `handle` - Processor handle from BASS_MultibandProcessor_Create
+/// * `header_out` - Pointer to MultibandStatsHeader to fill
+/// * `band_gr_out` - Pointer to f32 array for per-band gain reduction (num_bands elements)
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetStats(
+    handle: *mut c_void,
+    header_out: *mut MultibandStatsHeader,
+    band_gr_out: *mut f32,
+) -> BOOL {
+    if handle.is_null() || header_out.is_null() || band_gr_out.is_null() {
+        return FALSE;
+    }
+
+    let processor = &*(handle as *const MultibandProcessor);
+    let num_bands = processor.num_bands();
+
+    let band_gr_slice = std::slice::from_raw_parts_mut(band_gr_out, num_bands);
+    *header_out = processor.get_stats(band_gr_slice);
+
+    TRUE
+}
+
+/// Update a specific band's compressor settings.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+/// * `band` - Band index (0-based)
+/// * `config` - Pointer to CompressorConfig
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetBand(
+    handle: *mut c_void,
+    band: u32,
+    config: *const CompressorConfig,
+) -> BOOL {
+    if handle.is_null() || config.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    let cfg = &*config;
+
+    if band as usize >= processor.num_bands() {
+        return FALSE;
+    }
+
+    processor.set_band(band as usize, cfg);
+    TRUE
+}
+
+/// Set bypass mode for multiband processor.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetBypass(
+    handle: *mut c_void,
+    bypass: BOOL,
+) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.bypass = bypass != 0;
+    TRUE
+}
+
+/// Set input and output gains for multiband processor.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetGains(
+    handle: *mut c_void,
+    input_gain_db: f32,
+    output_gain_db: f32,
+) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.set_gains(input_gain_db, output_gain_db);
+    TRUE
+}
+
+/// Reset multiband processor state.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_Reset(handle: *mut c_void) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.reset();
+    TRUE
+}
+
+/// Pre-fill the multiband processor buffer.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_Prefill(handle: *mut c_void) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.prefill();
+    TRUE
+}
+
+/// Free the multiband processor and associated BASS stream.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_Free(handle: *mut c_void) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = Box::from_raw(handle as *mut MultibandProcessor);
+    if processor.output_handle != 0 {
+        BASS_StreamFree(processor.output_handle);
+    }
+    // Box drops here, freeing processor
+    TRUE
+}
+
+/// Get the number of bands in the processor.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetNumBands(handle: *mut c_void) -> DWORD {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let processor = &*(handle as *const MultibandProcessor);
+    processor.num_bands() as DWORD
 }
 
 // Windows DLL entry point

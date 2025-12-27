@@ -1,9 +1,11 @@
 //! Main broadcast processor implementation.
 
 mod config;
+pub mod multiband;
 mod stats;
 
 pub use config::*;
+pub use multiband::MultibandProcessor;
 pub use stats::*;
 
 use std::sync::atomic::Ordering;

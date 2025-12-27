@@ -61,3 +61,80 @@ pub struct ProcessorStats {
     /// Last processing time in microseconds
     pub process_time_us: u64,
 }
+
+// ============================================================================
+// N-Band Multiband Processor Statistics
+// ============================================================================
+
+/// Lock-free atomic statistics for N-band multiband processor.
+/// Uses atomics to avoid locking in the audio path.
+pub struct MultibandAtomicStats {
+    /// Total samples (frames) processed
+    pub samples_processed: AtomicU64,
+    /// Input peak level (scaled: value * 1000 for 3 decimal precision)
+    pub input_peak_x1000: AtomicI32,
+    /// Output peak level (scaled: value * 1000)
+    pub output_peak_x1000: AtomicI32,
+    /// Per-band gain reduction in dB * 100
+    pub band_gr_x100: Vec<AtomicI32>,
+    /// Underrun count (source returned less data than requested)
+    pub underruns: AtomicU64,
+    /// Last processing time in microseconds
+    pub process_time_us: AtomicU64,
+}
+
+impl MultibandAtomicStats {
+    /// Create new zeroed statistics for N bands.
+    pub fn new(num_bands: usize) -> Self {
+        let mut band_gr = Vec::with_capacity(num_bands);
+        for _ in 0..num_bands {
+            band_gr.push(AtomicI32::new(0));
+        }
+
+        Self {
+            samples_processed: AtomicU64::new(0),
+            input_peak_x1000: AtomicI32::new(0),
+            output_peak_x1000: AtomicI32::new(0),
+            band_gr_x100: band_gr,
+            underruns: AtomicU64::new(0),
+            process_time_us: AtomicU64::new(0),
+        }
+    }
+
+    /// Get the number of bands.
+    pub fn num_bands(&self) -> usize {
+        self.band_gr_x100.len()
+    }
+}
+
+/// FFI-compatible statistics header for N-band multiband processor.
+/// Per-band gain reduction values are returned in a separate buffer.
+#[repr(C)]
+#[derive(Clone, Debug)]
+pub struct MultibandStatsHeader {
+    /// Total samples (frames) processed
+    pub samples_processed: u64,
+    /// Input peak level (linear, 0.0 to 1.0+)
+    pub input_peak: f32,
+    /// Output peak level (linear, 0.0 to 1.0+)
+    pub output_peak: f32,
+    /// Number of bands (for caller to know buffer size)
+    pub num_bands: u32,
+    /// Number of source underruns
+    pub underruns: u64,
+    /// Last processing time in microseconds
+    pub process_time_us: u64,
+}
+
+impl Default for MultibandStatsHeader {
+    fn default() -> Self {
+        Self {
+            samples_processed: 0,
+            input_peak: 0.0,
+            output_peak: 0.0,
+            num_bands: 0,
+            underruns: 0,
+            process_time_us: 0,
+        }
+    }
+}

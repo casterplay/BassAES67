@@ -12,6 +12,10 @@ crate-type = ["cdylib", "rlib"]
 name = "file_to_speakers"
 path = "examples/file_to_speakers.rs"
 
+[[example]]
+name = "file_to_speakers_multiband"
+path = "examples/file_to_speakers_multiband.rs"
+
 [dependencies]
 # No external dependencies - processor is zero-latency sample-by-sample
 
