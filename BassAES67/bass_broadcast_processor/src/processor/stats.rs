@@ -77,6 +77,8 @@ pub struct MultibandAtomicStats {
     pub output_peak_x1000: AtomicI32,
     /// Per-band gain reduction in dB * 100
     pub band_gr_x100: Vec<AtomicI32>,
+    /// AGC gain reduction in dB * 100 (Phase 3)
+    pub agc_gr_x100: AtomicI32,
     /// Underrun count (source returned less data than requested)
     pub underruns: AtomicU64,
     /// Last processing time in microseconds
@@ -96,6 +98,7 @@ impl MultibandAtomicStats {
             input_peak_x1000: AtomicI32::new(0),
             output_peak_x1000: AtomicI32::new(0),
             band_gr_x100: band_gr,
+            agc_gr_x100: AtomicI32::new(0),
             underruns: AtomicU64::new(0),
             process_time_us: AtomicU64::new(0),
         }
@@ -120,6 +123,8 @@ pub struct MultibandStatsHeader {
     pub output_peak: f32,
     /// Number of bands (for caller to know buffer size)
     pub num_bands: u32,
+    /// AGC gain reduction in dB (negative when compressing) - Phase 3
+    pub agc_gr_db: f32,
     /// Number of source underruns
     pub underruns: u64,
     /// Last processing time in microseconds
@@ -133,6 +138,7 @@ impl Default for MultibandStatsHeader {
             input_peak: 0.0,
             output_peak: 0.0,
             num_bands: 0,
+            agc_gr_db: 0.0,
             underruns: 0,
             process_time_us: 0,
         }

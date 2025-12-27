@@ -16,6 +16,14 @@ path = "examples/file_to_speakers.rs"
 name = "file_to_speakers_multiband"
 path = "examples/file_to_speakers_multiband.rs"
 
+[[example]]
+name = "file_to_speakers_agc"
+path = "examples/file_to_speakers_agc.rs"
+
+[[example]]
+name = "file_to_speakers_agc_3stage"
+path = "examples/file_to_speakers_agc_3stage.rs"
+
 [dependencies]
 # No external dependencies - processor is zero-latency sample-by-sample
 

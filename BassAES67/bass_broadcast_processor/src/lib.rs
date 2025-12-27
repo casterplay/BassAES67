@@ -19,8 +19,8 @@ use processor::{BroadcastProcessor, MultibandProcessor};
 
 // Re-export types for external use
 pub use processor::{
-    CompressorConfig, MultibandConfig, MultibandConfigHeader,
-    MultibandStatsHeader, ProcessorConfig, ProcessorStats,
+    Agc3StageConfig, AgcConfig, CompressorConfig, MultibandConfig, MultibandConfigHeader,
+    MultibandStatsHeader, ProcessorConfig, ProcessorStats, AGC_MODE_SINGLE, AGC_MODE_THREE_STAGE,
 };
 
 /// STREAMPROC callback - called by BASS when output stream needs samples.
@@ -514,6 +514,147 @@ pub unsafe extern "system" fn BASS_MultibandProcessor_GetNumBands(handle: *mut c
 
     let processor = &*(handle as *const MultibandProcessor);
     processor.num_bands() as DWORD
+}
+
+// ============================================================================
+// Phase 3: AGC (Automatic Gain Control) FFI Functions
+// ============================================================================
+
+/// Set AGC parameters for multiband processor.
+///
+/// # Arguments
+/// * `handle` - Processor handle from BASS_MultibandProcessor_Create
+/// * `config` - Pointer to AgcConfig structure
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetAGC(
+    handle: *mut c_void,
+    config: *const AgcConfig,
+) -> BOOL {
+    if handle.is_null() || config.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.set_agc(&*config);
+    TRUE
+}
+
+/// Get default AGC configuration.
+///
+/// # Arguments
+/// * `config` - Pointer to AgcConfig structure to fill with defaults
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetDefaultAGC(
+    config: *mut AgcConfig,
+) -> BOOL {
+    if config.is_null() {
+        return FALSE;
+    }
+
+    *config = AgcConfig::default();
+    TRUE
+}
+
+// ============================================================================
+// Phase 3.1b: 3-Stage AGC (Omnia 9 Style) FFI Functions
+// ============================================================================
+
+/// Set 3-stage AGC configuration for multiband processor.
+/// This enables 3-stage AGC mode with individual slow/medium/fast stages.
+///
+/// # Arguments
+/// * `handle` - Processor handle from BASS_MultibandProcessor_Create
+/// * `config` - Pointer to Agc3StageConfig structure
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_SetAGC3Stage(
+    handle: *mut c_void,
+    config: *const Agc3StageConfig,
+) -> BOOL {
+    if handle.is_null() || config.is_null() {
+        return FALSE;
+    }
+
+    let processor = &mut *(handle as *mut MultibandProcessor);
+    processor.set_agc_3stage(&*config);
+    TRUE
+}
+
+/// Get default 3-stage AGC configuration.
+///
+/// # Arguments
+/// * `config` - Pointer to Agc3StageConfig structure to fill with defaults
+///
+/// # Returns
+/// TRUE on success, FALSE on failure.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetDefaultAGC3Stage(
+    config: *mut Agc3StageConfig,
+) -> BOOL {
+    if config.is_null() {
+        return FALSE;
+    }
+
+    *config = Agc3StageConfig::default();
+    TRUE
+}
+
+/// Check if 3-stage AGC mode is active.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+///
+/// # Returns
+/// TRUE (1) if 3-stage mode is active, FALSE (0) if single-stage.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_IsAGC3Stage(handle: *mut c_void) -> BOOL {
+    if handle.is_null() {
+        return FALSE;
+    }
+
+    let processor = &*(handle as *const MultibandProcessor);
+    if processor.is_agc_3stage() {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+/// Get individual stage gain reduction values for 3-stage AGC.
+///
+/// # Arguments
+/// * `handle` - Processor handle
+/// * `slow_gr` - Pointer to receive slow stage gain reduction (dB)
+/// * `medium_gr` - Pointer to receive medium stage gain reduction (dB)
+/// * `fast_gr` - Pointer to receive fast stage gain reduction (dB)
+///
+/// # Returns
+/// TRUE on success, FALSE on failure. Returns zeros if not in 3-stage mode.
+#[no_mangle]
+pub unsafe extern "system" fn BASS_MultibandProcessor_GetAGC3StageGR(
+    handle: *mut c_void,
+    slow_gr: *mut f32,
+    medium_gr: *mut f32,
+    fast_gr: *mut f32,
+) -> BOOL {
+    if handle.is_null() || slow_gr.is_null() || medium_gr.is_null() || fast_gr.is_null() {
+        return FALSE;
+    }
+
+    let processor = &*(handle as *const MultibandProcessor);
+    let (slow, medium, fast) = processor.get_agc_3stage_gr();
+    *slow_gr = slow;
+    *medium_gr = medium;
+    *fast_gr = fast;
+    TRUE
 }
 
 // Windows DLL entry point
